@@ -1,0 +1,38 @@
+import * as pdfjsLib from 'pdfjs-dist'
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
+
+/**
+ * Read the text of the first page and guess the marketplace.
+ * Returns 'amazon', 'flipkart', or null if it can't tell.
+ *
+ * Note: pdf.js detaches the buffer it's given, so pass a COPY (buffer.slice(0))
+ * if you still need the original for generating output.
+ */
+export async function detectMarketplace(arrayBuffer) {
+  try {
+    const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    // Scan the first couple of pages — enough to find the brand markers.
+    const pagesToScan = Math.min(doc.numPages, 2)
+    let text = ''
+    for (let i = 1; i <= pagesToScan; i++) {
+      const page = await doc.getPage(i)
+      const tc = await page.getTextContent()
+      text += ' ' + tc.items.map((it) => it.str).join(' ')
+    }
+    if (typeof doc.destroy === 'function') await doc.destroy()
+    text = text.toLowerCase()
+
+    const isFlipkart = /flipkart|shopsy|e-kart|ekart|fmpp/.test(text)
+    const isAmazon = /amazon|asspl|atspl/.test(text)
+
+    // If both somehow match, prefer the stronger/unique brand signal.
+    if (isFlipkart && !isAmazon) return 'flipkart'
+    if (isAmazon && !isFlipkart) return 'amazon'
+    if (isFlipkart && isAmazon) return /flipkart|shopsy/.test(text) ? 'flipkart' : 'amazon'
+    return null
+  } catch {
+    return null
+  }
+}

@@ -474,6 +474,58 @@ input[type='range']::-webkit-slider-thumb:active {
   cursor: not-allowed;
 }
 
+/* ---------- Start-position picker ---------- */
+.slotgrid {
+  display: grid;
+  gap: 6px;
+  width: 62%;
+  max-width: 240px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 15px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.slot:hover {
+  border-color: var(--brand-2);
+  color: var(--brand-ink);
+}
+
+.slot--start {
+  border-style: solid;
+  border-color: var(--brand);
+  background: linear-gradient(135deg, var(--brand-2), var(--brand));
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.slot--used {
+  border-style: solid;
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--muted-2);
+  opacity: 0.55;
+}
+
+.slot--used:hover {
+  border-color: var(--brand-2);
+  opacity: 0.8;
+}
+
 /* ---------- Number field grids ---------- */
 .field-grid {
   display: grid;

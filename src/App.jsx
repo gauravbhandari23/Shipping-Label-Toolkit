@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { buildLabelPdf, DEFAULT_SHEET, FLIPKART_CROP } from './labels'
 import { detectMarketplace } from './detect'
+import { analyzeAmazonLayout } from './layout'
 import logo from './assets/rangrooh-logo.png'
 
 export default function App() {
@@ -30,6 +31,8 @@ export default function App() {
   const [showOutlines, setShowOutlines] = useState(false)
   const [output, setOutput] = useState('labels') // 'labels' | 'both' | 'bills'
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
+  const [startSlot, setStartSlot] = useState(0) // first sticker position to fill
+  const [layout, setLayout] = useState(null) // auto-detected Amazon content boxes
 
   const lastBytes = useRef(null)
   const fileInput = useRef(null)
@@ -67,6 +70,16 @@ export default function App() {
     } else {
       setLocked(false)
     }
+
+    // For Amazon, measure the real content bounds of each label/invoice so the
+    // crop never clips the top and stays tight on any template. (Flipkart uses
+    // the manual crop controls.)
+    if (mp === 'amazon' || mp === null) {
+      const lay = await analyzeAmazonLayout(buf.slice(0))
+      setLayout(lay)
+    } else {
+      setLayout(null)
+    }
   }, [])
 
   const generate = useCallback(async () => {
@@ -85,6 +98,8 @@ export default function App() {
           includeBills: output === 'both',
           billsOnly: output === 'bills',
           sheet,
+          startSlot: Math.min(startSlot, sheet.cols * sheet.rows - 1),
+          layout: source === 'amazon' ? layout : null,
         },
       )
       lastBytes.current = bytes
@@ -102,7 +117,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [buffer, source, splitPct, crop, innerPad, showOutlines, output, sheet])
+  }, [buffer, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, layout])
 
   // Regenerate whenever the file or any control changes.
   useEffect(() => {
@@ -117,6 +132,7 @@ export default function App() {
     setShowOutlines(false)
     setOutput('labels')
     setSheet(DEFAULT_SHEET)
+    setStartSlot(0)
   }
 
   // Clear everything and start fresh with a new file.
@@ -132,6 +148,7 @@ export default function App() {
     setSource('amazon')
     setDetected(null)
     setLocked(false)
+    setLayout(null)
     resetSettings()
     lastBytes.current = null
     if (fileInput.current) fileInput.current.value = ''
@@ -381,6 +398,49 @@ export default function App() {
                     onChange={(e) => setInnerPad(Number(e.target.value))}
                   />
                 </label>
+
+                <div className="ctrl">
+                  <span className="ctrl__label">Start position on the sheet</span>
+                  <div
+                    className="slotgrid"
+                    style={{
+                      gridTemplateColumns: `repeat(${sheet.cols}, 1fr)`,
+                      aspectRatio: `${sheet.cols * sheet.labelW} / ${sheet.rows * sheet.labelH}`,
+                    }}
+                  >
+                    {Array.from({ length: sheet.cols * sheet.rows }).map((_, i) => {
+                      const used = i < startSlot
+                      const isStart = i === startSlot
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          className={
+                            'slot' +
+                            (isStart ? ' slot--start' : '') +
+                            (used ? ' slot--used' : '')
+                          }
+                          onClick={() => setStartSlot(i)}
+                          title={
+                            used
+                              ? 'Skipped (already used)'
+                              : isStart
+                                ? 'First label goes here'
+                                : `Fills after the start (#${i - startSlot + 1})`
+                          }
+                        >
+                          {used ? '✕' : i - startSlot + 1}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <small className="hint">
+                    Already peeled some stickers off this sheet? Click the first
+                    empty spot — labels start there and fill onward. Crossed-out
+                    spots are skipped. (Bills aren't affected — they always pack
+                    from the top.)
+                  </small>
+                </div>
 
                 <div className="ctrl">
                   <span className="ctrl__label">What to export</span>

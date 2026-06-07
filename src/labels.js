@@ -48,6 +48,13 @@ export const FLIPKART_CROP = {
  * @param {boolean} options.includeBills  if true, also output the bills after the labels
  * @param {boolean} options.billsOnly     if true, output ONLY the bills (no labels)
  * @param {object}  options.sheet         label-sheet template in mm (see DEFAULT_SHEET)
+ * @param {number}  options.startSlot     first sticker position to fill on the first sheet,
+ *                                        counting left-to-right, top-to-bottom (0 = top-left).
+ *                                        Lets you skip stickers you've already peeled off.
+ * @param {Array}   options.layout        [amazon] auto-detected content boxes per page
+ *                                        ([{labels:[Box], bills:[Box]}], Box in PDF points).
+ *                                        When given, used instead of fixed crop fractions so
+ *                                        nothing is clipped on any Amazon template.
  * @returns {Promise<{bytes: Uint8Array, labelCount, billCount, sheetCount}>}
  */
 export async function buildLabelPdf(arrayBuffer, options = {}) {
@@ -60,6 +67,8 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     includeBills = false,
     billsOnly = false,
     sheet = DEFAULT_SHEET,
+    startSlot = 0,
+    layout = null,
   } = options
 
   const wantLabels = !billsOnly
@@ -100,39 +109,51 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
         })
       }
     }
+  } else if (layout && layout.length === srcPages.length) {
+    // amazon, auto-detected: use the exact ink bounds measured per quadrant.
+    // This never clips the top and keeps every label tight & aligned, whatever
+    // the Amazon template's margins happen to be.
+    srcPages.forEach((page, i) => {
+      const entry = layout[i] || { labels: [], bills: [] }
+      for (const b of entry.labels) {
+        labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
+      }
+      if (wantBills) {
+        for (const b of entry.bills) {
+          billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
+        }
+      }
+    })
   } else {
-    // amazon: 2 orders per page; labels on the left column, bills on the right.
-    // Crop each label tight to its content box (template fractions, measured
-    // from the top edge) so the two labels line up and there's no extra
-    // whitespace between the top and bottom label.
-    // Content-box top/bottom fractions (from the top edge). Labels (left column)
-    // and invoices (right column) start at slightly different heights, so each
-    // has its own crop — tuned to give both the SAME small top margin.
-    const A1 = { top: 0.025, bottom: 0.505 } // label, order 1 (upper half)
-    const A2 = { top: 0.525, bottom: 0.992 } // label, order 2 (lower half)
-    const B1 = { top: 0.001, bottom: 0.505 } // invoice, order 1
-    const B2 = { top: 0.504, bottom: 0.992 } // invoice, order 2
+    // amazon fallback (detection unavailable): split each page into a 2x2 grid
+    // by fixed fractions. Labels = left column, invoices = right column.
+    const A1 = { top: 0.0, bottom: 0.5 } // label, order 1 (upper half)
+    const A2 = { top: 0.5, bottom: 1.0 } // label, order 2 (lower half)
     for (const page of srcPages) {
       const { width, height } = page.getSize()
       const labelW = width * splitRatio
       labelRegions.push({ page, left: 0, right: labelW, top: height * (1 - A1.top), bottom: height * (1 - A1.bottom) })
       labelRegions.push({ page, left: 0, right: labelW, top: height * (1 - A2.top), bottom: height * (1 - A2.bottom) })
       if (wantBills) {
-        billRegions.push({ page, left: labelW, right: width, top: height * (1 - B1.top), bottom: height * (1 - B1.bottom) })
-        billRegions.push({ page, left: labelW, right: width, top: height * (1 - B2.top), bottom: height * (1 - B2.bottom) })
+        billRegions.push({ page, left: labelW, right: width, top: height, bottom: height * 0.5 })
+        billRegions.push({ page, left: labelW, right: width, top: height * 0.5, bottom: 0 })
       }
     }
   }
 
-  // 2. Place labels onto sticker sheets (unless we only want bills).
+  // 2. Place labels onto sticker sheets (unless we only want bills). The
+  //    startSlot lets the user skip stickers already peeled off the first sheet.
   if (wantLabels) {
-    await placeOnSheets(out, labelRegions, sheet, innerPad, showOutlines)
+    await placeOnSheets(out, labelRegions, sheet, innerPad, showOutlines, startSlot)
   }
 
   // 3. Output the bills. Amazon invoices are half-page and pack 4 to a sticker
   //    sheet nicely. Flipkart invoices are full-width, so we stack 2 whole
   //    invoices per A4 page — each bill is always kept whole on one page, never
   //    split across two pages.
+  //    Bills are NOT affected by startSlot — that only skips already-used
+  //    stickers on the physical label sheet. Bills always pack tight from the
+  //    top so they stay readable and don't waste paper.
   if (wantBills && billRegions.length) {
     if (source === 'flipkart') {
       await placeStacked(out, billRegions, 2)
@@ -156,7 +177,7 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
  * ratio and centered. Always starts a fresh page, so labels and bills stay on
  * separate sheets.
  */
-async function placeOnSheets(out, regions, sheet, innerPad, showOutlines) {
+async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0) {
   const perPage = sheet.cols * sheet.rows
   const pageW = sheet.pageW * MM
   const pageH = sheet.pageH * MM
@@ -168,10 +189,15 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines) {
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
 
+  // Offset every label by the chosen start position so the first one lands in
+  // the spot the user picked (skipping any stickers already peeled off).
+  const offset = ((startSlot % perPage) + perPage) % perPage
+
   let outPage = null
   for (let k = 0; k < regions.length; k++) {
-    const slot = k % perPage
-    if (slot === 0) outPage = out.addPage([pageW, pageH])
+    const globalSlot = offset + k
+    const slot = globalSlot % perPage
+    if (k === 0 || slot === 0) outPage = out.addPage([pageW, pageH])
 
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols) // row 0 = top
@@ -224,16 +250,17 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines) {
  * each region fitted whole inside its band. A single region is always contained
  * in one band on one page — never split across pages. Used for Flipkart bills.
  */
-async function placeStacked(out, regions, rows) {
+async function placeStacked(out, regions, rows, startBand = 0) {
   const pageW = 210 * MM
   const pageH = 297 * MM
   const margin = 8 * MM
   const bandH = pageH / rows
+  const offset = ((startBand % rows) + rows) % rows
 
   let page = null
   for (let k = 0; k < regions.length; k++) {
-    const slot = k % rows
-    if (slot === 0) page = out.addPage([pageW, pageH])
+    const slot = (offset + k) % rows
+    if (k === 0 || slot === 0) page = out.addPage([pageW, pageH])
 
     const r = regions[k]
     const embedded = await out.embedPage(r.page, {

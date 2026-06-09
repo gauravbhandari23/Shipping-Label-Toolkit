@@ -1,4 +1,4 @@
-import { PDFDocument, rgb } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
 // 72 PDF points = 1 inch = 25.4 mm.
 const MM = 72 / 25.4
@@ -288,6 +288,145 @@ async function placeStacked(out, regions, rows, startBand = 0) {
     const x = (pageW - drawW) / 2
     const y = bandBottom + (bandH - drawH) / 2
     page.drawPage(embedded, { x, y, width: drawW, height: drawH })
+  }
+}
+
+/**
+ * Build a sheet of repeated TEXT stickers (no source PDF needed). Prints `text`
+ * `count` times onto the same sticker grid used for labels, flowing onto a new
+ * A4 sheet every cols*rows stickers. `startSlot` skips already-used stickers, so
+ * you can print onto just one part of a partly-used sheet.
+ *
+ * @returns {Promise<{bytes: Uint8Array, labelCount, sheetCount}>}
+ */
+export async function buildTextLabelPdf(options = {}) {
+  const {
+    text = '',
+    count = 1,
+    entries = null, // [{text, count}] — different sizes/texts, grouped in order
+    fontSize = 1000, // upper cap; text auto-sizes to fill the cell up to this
+    bold = true,
+    align = 'center',
+    sheet = DEFAULT_SHEET,
+    startSlot = 0,
+    showOutlines = false,
+    innerPad = 1.5,
+  } = options
+
+  const out = await PDFDocument.create()
+  const font = await out.embedFont(bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica)
+
+  const perPage = sheet.cols * sheet.rows
+  const pageW = sheet.pageW * MM
+  const pageH = sheet.pageH * MM
+  const labelW = sheet.labelW * MM
+  const labelH = sheet.labelH * MM
+  const mTop = sheet.marginTop * MM
+  const mLeft = sheet.marginLeft * MM
+  const gapX = sheet.gapX * MM
+  const gapY = sheet.gapY * MM
+  const pad = innerPad * MM
+  const offset = ((startSlot % perPage) + perPage) % perPage
+
+  // Build the flat list of label texts. With `entries`, each size's text is
+  // repeated its count times, kept grouped in the order given.
+  const items =
+    entries && entries.length
+      ? entries.flatMap((e) => Array(Math.max(0, Math.floor(e.count || 0))).fill(String(e.text ?? '')))
+      : Array(Math.max(0, Math.floor(count))).fill(text)
+  const n = items.length
+
+  // Auto-size: pick the largest font (capped at fontSize) at which EVERY label
+  // still fits its cell. Bigger cells / less padding → bigger text; small cells
+  // shrink the text so it never overflows or overlaps.
+  const availW = labelW - pad * 2
+  const availH = labelH - pad * 2
+  const cap = Math.max(4, Math.min(fontSize, Math.ceil(availH)))
+  let drawSize = cap
+  for (const t of new Set(items)) {
+    drawSize = Math.min(drawSize, fitFontSize(font, t, cap, availW, availH))
+  }
+
+  // Fill one label per cell, row by row (left→right, top→bottom), flowing onto a
+  // new A4 every cols*rows cells. startSlot skips already-used cells.
+  let page = null
+  for (let k = 0; k < n; k++) {
+    const slot = (offset + k) % perPage
+    if (k === 0 || slot === 0) page = out.addPage([pageW, pageH])
+
+    const col = slot % sheet.cols
+    const row = Math.floor(slot / sheet.cols)
+    const cellLeft = mLeft + col * (labelW + gapX)
+    const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
+
+    if (showOutlines) {
+      page.drawRectangle({ x: cellLeft, y: cellBottom, width: labelW, height: labelH, borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 0.5 })
+    }
+    try {
+      drawCenteredText(page, font, items[k], drawSize, align, cellLeft + pad, cellBottom + pad, labelW - pad * 2, labelH - pad * 2)
+    } catch {
+      throw new Error('That text has characters this label font can’t print yet (e.g. Hindi). Use English letters, numbers and symbols.')
+    }
+  }
+
+  const bytes = await out.save()
+  return { bytes, labelCount: n, sheetCount: out.getPageCount() }
+}
+
+/**
+ * Largest font size (≤ requested) at which `text` fits inside a w×h box, after
+ * word-wrapping. Steps down from the requested size to a small floor.
+ */
+function fitFontSize(font, text, requested, w, h) {
+  if (!text || !text.trim() || w <= 0 || h <= 0) return requested
+  const MIN = 4
+  let size = Math.max(MIN, requested)
+  while (size > MIN) {
+    const lines = wrapLines(font, text, size, w)
+    const totalH = lines.length * size * 1.25
+    const widest = Math.max(0, ...lines.map((l) => font.widthOfTextAtSize(l, size)))
+    if (totalH <= h && widest <= w) break
+    size -= 1
+  }
+  return size
+}
+
+/** Wrap `text` into lines that fit `maxWidth`, honoring explicit newlines. */
+function wrapLines(font, text, fontSize, maxWidth) {
+  const lines = []
+  for (const para of String(text).split('\n')) {
+    const words = para.split(/\s+/).filter(Boolean)
+    if (!words.length) {
+      lines.push('')
+      continue
+    }
+    let line = words[0]
+    for (let i = 1; i < words.length; i++) {
+      const test = line + ' ' + words[i]
+      if (font.widthOfTextAtSize(test, fontSize) <= maxWidth) line = test
+      else {
+        lines.push(line)
+        line = words[i]
+      }
+    }
+    lines.push(line)
+  }
+  return lines
+}
+
+/** Draw wrapped text centered vertically and (by default) horizontally in a box. */
+function drawCenteredText(page, font, text, fontSize, align, x, y, w, h) {
+  if (!text || !text.trim()) return
+  const lines = wrapLines(font, text, fontSize, w)
+  const lineHeight = fontSize * 1.25
+  const totalH = lines.length * lineHeight
+  // Baseline of the first (top) line so the whole block is vertically centered.
+  let cursorY = y + h / 2 + totalH / 2 - lineHeight + (lineHeight - fontSize) / 2
+  for (const line of lines) {
+    const tw = font.widthOfTextAtSize(line, fontSize)
+    const tx = align === 'left' ? x : x + (w - tw) / 2
+    page.drawText(line, { x: tx, y: cursorY, size: fontSize, font, color: rgb(0, 0, 0) })
+    cursorY -= lineHeight
   }
 }
 

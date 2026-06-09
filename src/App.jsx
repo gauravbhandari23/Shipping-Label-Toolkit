@@ -97,6 +97,7 @@ export default function App() {
           showOutlines,
           includeBills: output === 'both',
           billsOnly: output === 'bills',
+          pairs: output === 'pairs',
           sheet,
           startSlot: Math.min(startSlot, sheet.cols * sheet.rows - 1),
           layout: source === 'amazon' ? layout : null,
@@ -399,6 +400,7 @@ export default function App() {
                   />
                 </label>
 
+                {output !== 'pairs' && (
                 <div className="ctrl">
                   <span className="ctrl__label">Start position on the sheet</span>
                   <div
@@ -436,18 +438,20 @@ export default function App() {
                   </div>
                   <small className="hint">
                     Already peeled some stickers off this sheet? Click the first
-                    empty spot — labels start there and fill onward. Crossed-out
-                    spots are skipped. (Bills aren't affected — they always pack
-                    from the top.)
+                    empty spot — output starts there and fills onward. Crossed-out
+                    spots are skipped. Applies to whatever you export (labels or
+                    bills).
                   </small>
                 </div>
+                )}
 
                 <div className="ctrl">
                   <span className="ctrl__label">What to export</span>
-                  <div className="seg seg--three">
+                  <div className="seg seg--grid">
                     {[
-                      ['labels', 'Labels'],
-                      ['both', 'Labels + bills'],
+                      ['labels', 'Labels only'],
+                      ['pairs', 'Label + bill'],
+                      ['both', 'Labels, then bills'],
                       ['bills', 'Bills only'],
                     ].map(([val, label]) => (
                       <button
@@ -463,13 +467,15 @@ export default function App() {
                   <small className="hint">
                     {output === 'labels'
                       ? 'Only the shipping labels, packed on sticker sheets.'
-                      : output === 'both'
-                        ? `Labels first, then the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole).`
-                        : `Only the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole) — no labels.`}
+                      : output === 'pairs'
+                        ? 'Each order kept together — label on the left, its bill on the right, 2 per page.'
+                        : output === 'both'
+                          ? `Labels first, then the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole).`
+                          : `Only the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole) — no labels.`}
                   </small>
                 </div>
 
-                {output !== 'bills' && (
+                {output !== 'bills' && output !== 'pairs' && (
                   <label className="switch">
                     <input
                       type="checkbox"

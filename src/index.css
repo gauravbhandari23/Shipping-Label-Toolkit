@@ -441,6 +441,18 @@ input[type='range']::-webkit-slider-thumb:active {
   padding: 9px 6px;
 }
 
+/* 2x2 grid for four export options. */
+.seg--grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.seg--grid .seg__btn {
+  font-size: 13px;
+  padding: 9px 6px;
+}
+
 .seg__btn {
   flex: 1;
   border: 0;

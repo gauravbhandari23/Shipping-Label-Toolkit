@@ -66,13 +66,16 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     showOutlines = false,
     includeBills = false,
     billsOnly = false,
+    pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
     layout = null,
   } = options
 
-  const wantLabels = !billsOnly
-  const wantBills = includeBills || billsOnly
+  // 'pairs' keeps each order's label + invoice together (label left, bill
+  // right), so we need to collect both region sets.
+  const wantLabels = pairs || !billsOnly
+  const wantBills = pairs || includeBills || billsOnly
 
   const src = await PDFDocument.load(arrayBuffer)
   const out = await PDFDocument.create()
@@ -141,24 +144,28 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     }
   }
 
-  // 2. Place labels onto sticker sheets (unless we only want bills). The
-  //    startSlot lets the user skip stickers already peeled off the first sheet.
-  if (wantLabels) {
-    await placeOnSheets(out, labelRegions, sheet, innerPad, showOutlines, startSlot)
-  }
+  if (pairs) {
+    // Keep each order together: label on the LEFT, its invoice on the RIGHT,
+    // two orders stacked per A4 page (mirrors the original Amazon sheet).
+    await placePairs(out, labelRegions, billRegions, 2)
+  } else {
+    // 2. Place labels onto sticker sheets (unless we only want bills). The
+    //    startSlot lets the user skip stickers already peeled off the first sheet.
+    if (wantLabels) {
+      await placeOnSheets(out, labelRegions, sheet, innerPad, showOutlines, startSlot)
+    }
 
-  // 3. Output the bills. Amazon invoices are half-page and pack 4 to a sticker
-  //    sheet nicely. Flipkart invoices are full-width, so we stack 2 whole
-  //    invoices per A4 page — each bill is always kept whole on one page, never
-  //    split across two pages.
-  //    Bills are NOT affected by startSlot — that only skips already-used
-  //    stickers on the physical label sheet. Bills always pack tight from the
-  //    top so they stay readable and don't waste paper.
-  if (wantBills && billRegions.length) {
-    if (source === 'flipkart') {
-      await placeStacked(out, billRegions, 2)
-    } else {
-      await placeOnSheets(out, billRegions, sheet, innerPad, showOutlines)
+    // 3. Output the bills. Amazon invoices are half-page and pack 4 to a sticker
+    //    sheet nicely. Flipkart invoices are full-width, so we stack 2 whole
+    //    invoices per A4 page — each bill is always kept whole on one page, never
+    //    split across two pages. The startSlot applies here too so bills can be
+    //    positioned just like labels (each is still kept whole, never split).
+    if (wantBills && billRegions.length) {
+      if (source === 'flipkart') {
+        await placeStacked(out, billRegions, 2, startSlot % 2)
+      } else {
+        await placeOnSheets(out, billRegions, sheet, innerPad, showOutlines, startSlot)
+      }
     }
   }
 
@@ -282,4 +289,55 @@ async function placeStacked(out, regions, rows, startBand = 0) {
     const y = bandBottom + (bandH - drawH) / 2
     page.drawPage(embedded, { x, y, width: drawW, height: drawH })
   }
+}
+
+/**
+ * Keep each order together: label on the LEFT, its invoice on the RIGHT, both
+ * fitted side by side in one row, `rowsPerPage` orders stacked per A4 page.
+ * `labels[i]` is paired with `bills[i]`. Either side may be missing (null) — the
+ * other is still placed.
+ */
+async function placePairs(out, labels, bills, rowsPerPage = 2) {
+  const pageW = 210 * MM
+  const pageH = 297 * MM
+  const margin = 6 * MM
+  const gap = 5 * MM // space between the label and the bill
+  const rowH = pageH / rowsPerPage
+  const cellW = (pageW - margin * 2 - gap) / 2
+  const cellH = rowH - margin * 2
+  const n = Math.max(labels.length, bills.length)
+
+  let page = null
+  for (let i = 0; i < n; i++) {
+    const slot = i % rowsPerPage
+    if (slot === 0) page = out.addPage([pageW, pageH])
+    const rowBottom = pageH - (slot + 1) * rowH // slot 0 = top row
+    const cellBottom = rowBottom + margin
+    // Label fills the left cell, invoice the right cell.
+    await drawFitted(out, page, labels[i], margin, cellBottom, cellW, cellH)
+    await drawFitted(out, page, bills[i], margin + cellW + gap, cellBottom, cellW, cellH)
+  }
+}
+
+/**
+ * Embed a source region and draw it fitted (aspect-preserved) into the target
+ * rectangle [x, y, w, h], centered horizontally and top-aligned. No-op if the
+ * region is missing.
+ */
+async function drawFitted(out, page, region, x, y, w, h) {
+  if (!region) return
+  const embedded = await out.embedPage(region.page, {
+    left: region.left,
+    bottom: region.bottom,
+    right: region.right,
+    top: region.top,
+  })
+  const regW = region.right - region.left
+  const regH = region.top - region.bottom
+  const scale = Math.min(w / regW, h / regH)
+  const drawW = regW * scale
+  const drawH = regH * scale
+  const dx = x + (w - drawW) / 2
+  const dy = y + h - drawH // top-align
+  page.drawPage(embedded, { x: dx, y: dy, width: drawW, height: drawH })
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { buildLabelPdf, buildTextLabelPdf, DEFAULT_SHEET, FLIPKART_CROP } from './labels'
+import { buildLabelPdf, buildTextLabelPdf, DEFAULT_SHEET, FLIPKART_CROP, MYNTRA_CROP } from './labels'
 import { detectMarketplace } from './detect'
 import { analyzeAmazonLayout } from './layout'
 import logo from './assets/rangrooh-logo.png'
@@ -86,6 +86,16 @@ export default function App() {
       /* ignore */
     }
   }, [theme])
+
+  // Use the right default crop for the selected marketplace. Myntra has no
+  // bill, so force the export back to labels-only.
+  useEffect(() => {
+    if (source === 'flipkart') setCrop(FLIPKART_CROP)
+    else if (source === 'myntra') {
+      setCrop(MYNTRA_CROP)
+      setOutput('labels')
+    }
+  }, [source])
 
   const clearPreview = () => {
     setStats(null)
@@ -180,6 +190,8 @@ export default function App() {
     setBusy(true)
     setError('')
     try {
+      // Myntra has no bill, so it's always labels-only.
+      const out2 = source === 'myntra' ? 'labels' : output
       const { bytes, labelCount, billCount, sheetCount } = await buildLabelPdf(
         buffer.slice(0),
         {
@@ -188,9 +200,9 @@ export default function App() {
           flipkartCrop: crop,
           innerPad: Number(innerPad),
           showOutlines,
-          includeBills: output === 'both',
-          billsOnly: output === 'bills',
-          pairs: output === 'pairs',
+          includeBills: out2 === 'both',
+          billsOnly: out2 === 'bills',
+          pairs: out2 === 'pairs',
           sheet,
           startSlot: Math.min(startSlot, perPage - 1),
           layout: source === 'amazon' ? layout : null,
@@ -221,7 +233,7 @@ export default function App() {
   // Reset only the settings — keeps the loaded PDF / typed text.
   const resetSettings = () => {
     setSplitPct(50)
-    setCrop(FLIPKART_CROP)
+    setCrop(source === 'myntra' ? MYNTRA_CROP : FLIPKART_CROP)
     setInnerPad(1)
     setShowOutlines(false)
     setOutput('labels')
@@ -288,7 +300,7 @@ export default function App() {
 
   const cropFields = [
     ['top', 'Top edge (%)'],
-    ['bottom', 'Cut line / bottom (%)'],
+    ['bottom', source === 'myntra' ? 'Bottom edge (%)' : 'Cut line / bottom (%)'],
     ['left', 'Left edge (%)'],
     ['right', 'Right edge (%)'],
   ]
@@ -436,11 +448,11 @@ export default function App() {
       </header>
 
       <section className="hero">
-        <span className="hero__pill">Amazon · Flipkart · A4 ST4 sticker sheets</span>
+        <span className="hero__pill">Amazon · Flipkart · Myntra · A4 ST4 sticker sheets</span>
         <h1>Print clean labels in seconds.</h1>
         <p>
-          Turn an Amazon or Flipkart invoice PDF into tidy shipping labels on A4
-          sticker sheets — or print your own repeated text labels. Everything runs
+          Turn an Amazon, Flipkart or Myntra label PDF into tidy shipping labels on
+          A4 sticker sheets — or print your own repeated text labels. Everything runs
           in your browser; nothing is ever uploaded.
         </p>
       </section>
@@ -520,9 +532,10 @@ export default function App() {
                   <div className="controls">
                     <div className="ctrl">
                       <span className="ctrl__label">Marketplace</span>
-                      <div className="seg">
-                        {['amazon', 'flipkart'].map((mp) => {
+                      <div className="seg seg--three">
+                        {['amazon', 'flipkart', 'myntra'].map((mp) => {
                           const blocked = locked && detected !== mp
+                          const labels = { amazon: 'Amazon', flipkart: 'Flipkart', myntra: 'Myntra' }
                           return (
                             <button
                               key={mp}
@@ -536,7 +549,7 @@ export default function App() {
                               onClick={() => !blocked && setSource(mp)}
                               title={blocked ? 'This PDF was detected as a different marketplace' : ''}
                             >
-                              {mp === 'amazon' ? 'Amazon' : 'Flipkart'}
+                              {labels[mp]}
                               {blocked ? ' 🔒' : ''}
                             </button>
                           )
@@ -544,7 +557,7 @@ export default function App() {
                       </div>
                       {detected ? (
                         <small className="hint hint--ok">
-                          Detected a <b>{detected === 'amazon' ? 'Amazon' : 'Flipkart'}</b> PDF —
+                          Detected a <b>{{ amazon: 'Amazon', flipkart: 'Flipkart', myntra: 'Myntra' }[detected]}</b> PDF —
                           locked to it.{' '}
                           <button type="button" className="linkbtn" onClick={() => setLocked(false)}>
                             Wrong? Unlock
@@ -554,7 +567,7 @@ export default function App() {
                         <small className="hint">
                           {fileName
                             ? "Couldn't auto-detect — choose the marketplace."
-                            : 'Amazon = 2 orders per page (label left). Flipkart = 1 per page (label top).'}
+                            : 'Amazon = 2 orders/page. Flipkart = 1/page. Myntra = 1 label/page (no bill).'}
                         </small>
                       )}
                     </div>
@@ -578,7 +591,9 @@ export default function App() {
                       </label>
                     ) : (
                       <div className="ctrl">
-                        <span className="ctrl__label">Flipkart label crop</span>
+                        <span className="ctrl__label">
+                          {source === 'myntra' ? 'Myntra label crop' : 'Flipkart label crop'}
+                        </span>
                         <div className="field-grid">
                           {cropFields.map(([key, label]) => (
                             <label key={key} className="field">
@@ -595,9 +610,9 @@ export default function App() {
                           ))}
                         </div>
                         <small className="hint">
-                          The label sits above the dashed line. Lower the <b>cut line</b>{' '}
-                          to include more; raise the <b>left/right</b> edges to trim
-                          whitespace and enlarge the label.
+                          {source === 'myntra'
+                            ? 'The whole page is the label. Adjust the edges to trim the blank margins around it.'
+                            : 'The label sits above the dashed line. Lower the cut line to include more; raise the left/right edges to trim whitespace.'}
                         </small>
                       </div>
                     )}
@@ -618,6 +633,7 @@ export default function App() {
 
                     {output !== 'pairs' && startPositionPicker}
 
+                    {source !== 'myntra' && (
                     <div className="ctrl">
                       <span className="ctrl__label">What to export</span>
                       <div className="seg seg--grid">
@@ -647,6 +663,7 @@ export default function App() {
                               : `Only the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole) — no labels.`}
                       </small>
                     </div>
+                    )}
 
                     {output !== 'bills' && output !== 'pairs' && (
                       <label className="switch">

@@ -30,6 +30,16 @@ export const FLIPKART_CROP = {
   bottom: 0.46, // fraction from top edge where the label ends (the dashed cut line)
 }
 
+// Myntra: 1 shipping label per page, no invoice. The label is a full-page image
+// with a blank right margin, so the default crop just trims that margin. Same
+// top-left fraction format as FLIPKART_CROP; the user can fine-tune it.
+export const MYNTRA_CROP = {
+  left: 0.0,
+  right: 0.86, // trim the blank right margin
+  top: 0.0,
+  bottom: 1.0,
+}
+
 /**
  * Build a labels PDF from an Amazon or Flipkart "label + invoice" PDF, laid out
  * to match a pre-cut sticker sheet (default: A4 ST4 / Avery L7169, 4 per sheet).
@@ -37,12 +47,13 @@ export const FLIPKART_CROP = {
  * Source layouts:
  *   amazon   — 2 orders per page in a 2x2 grid: labels = LEFT column, invoices = RIGHT column.
  *   flipkart — 1 order per page: label on TOP, invoice on BOTTOM (split by a horizontal line).
+ *   myntra   — 1 label per page, NO invoice; the whole page is the label (crop trims margins).
  *
  * @param {ArrayBuffer} arrayBuffer  raw bytes of the uploaded PDF
  * @param {object} options
- * @param {'amazon'|'flipkart'} options.source  which marketplace layout (default 'amazon')
+ * @param {'amazon'|'flipkart'|'myntra'} options.source  which marketplace layout (default 'amazon')
  * @param {number}  options.splitRatio    [amazon] fraction of page width that is the label (default 0.5)
- * @param {object}  options.flipkartCrop  [flipkart] crop box as top-left fractions (see FLIPKART_CROP)
+ * @param {object}  options.flipkartCrop  [flipkart/myntra] crop box as top-left fractions
  * @param {number}  options.innerPad      mm of breathing room inside each sticker (default 2)
  * @param {boolean} options.showOutlines  draw a thin border at each label position (for test prints)
  * @param {boolean} options.includeBills  if true, also output the bills after the labels
@@ -89,7 +100,20 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
   const labelRegions = []
   const billRegions = []
 
-  if (source === 'flipkart') {
+  if (source === 'myntra') {
+    // 1 shipping label per page, no invoice. Crop trims the page margins.
+    const c = flipkartCrop
+    for (const page of srcPages) {
+      const { width, height } = page.getSize()
+      labelRegions.push({
+        page,
+        left: c.left * width,
+        right: c.right * width,
+        top: height * (1 - c.top),
+        bottom: height * (1 - c.bottom),
+      })
+    }
+  } else if (source === 'flipkart') {
     const c = flipkartCrop
     for (const page of srcPages) {
       const { width, height } = page.getSize()

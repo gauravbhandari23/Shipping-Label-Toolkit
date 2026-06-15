@@ -22,15 +22,22 @@ export async function detectMarketplace(arrayBuffer) {
       text += ' ' + tc.items.map((it) => it.str).join(' ')
     }
     if (typeof doc.destroy === 'function') await doc.destroy()
+    const raw = text
     text = text.toLowerCase()
+
+    // Explicit brand wins first (Myntra before Flipkart — both can use Ekart).
+    if (/myntra/.test(text)) return 'myntra'
 
     const isFlipkart = /flipkart|shopsy|e-kart|ekart|fmpp/.test(text)
     const isAmazon = /amazon|asspl|atspl/.test(text)
 
-    // If both somehow match, prefer the stronger/unique brand signal.
     if (isFlipkart && !isAmazon) return 'flipkart'
     if (isAmazon && !isFlipkart) return 'amazon'
     if (isFlipkart && isAmazon) return /flipkart|shopsy/.test(text) ? 'flipkart' : 'amazon'
+
+    // Myntra labels are a single full-page IMAGE with no extractable text, so a
+    // near-empty page (no Amazon/Flipkart markers) is almost certainly Myntra.
+    if (raw.trim().length < 20) return 'myntra'
     return null
   } catch {
     return null

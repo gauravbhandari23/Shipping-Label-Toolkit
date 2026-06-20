@@ -517,6 +517,71 @@ input[type='range']::-webkit-slider-thumb:active {
   max-width: 130px;
 }
 
+/* ---------- Uploaded file list (batch) ---------- */
+.filelist {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.filelist__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.filelist__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.filelist__name {
+  flex: 1;
+}
+
+.filelist__tag {
+  flex-shrink: 0;
+  font-weight: 800;
+  font-size: 11px;
+  color: var(--brand-ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.filelist__del {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.filelist__del:hover {
+  border-color: var(--brand-2);
+  color: var(--brand-ink);
+}
+
 /* ---------- Size list (text labels) ---------- */
 .sizelist {
   display: flex;

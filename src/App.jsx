@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { buildLabelPdf, buildTextLabelPdf, DEFAULT_SHEET, FLIPKART_CROP, MYNTRA_CROP } from './labels'
+import { buildLabelPdf, buildCombinedLabelPdf, buildTextLabelPdf, DEFAULT_SHEET, FLIPKART_CROP, MYNTRA_CROP } from './labels'
 import { detectMarketplace } from './detect'
 import { analyzeAmazonLayout } from './layout'
 import logo from './assets/rangrooh-logo.png'
@@ -34,8 +34,8 @@ const GRID_PRESETS = [
 
 export default function App() {
   const [mode, setMode] = useState('pdf') // 'pdf' | 'text'
-  const [fileName, setFileName] = useState('')
-  const [buffer, setBuffer] = useState(null)
+  // Uploaded PDFs: [{ name, buffer, source, detected, layout }]. One or many.
+  const [docs, setDocs] = useState([])
   const [pdfUrl, setPdfUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -61,7 +61,6 @@ export default function App() {
   const [output, setOutput] = useState('labels') // 'labels' | 'pairs' | 'both' | 'bills'
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
   const [startSlot, setStartSlot] = useState(0) // first sticker position to fill
-  const [layout, setLayout] = useState(null) // auto-detected Amazon content boxes
 
   // Text-mode controls
   const [sizes, setSizes] = useState([{ text: 'S', count: 20 }]) // [{text, count}]
@@ -76,6 +75,14 @@ export default function App() {
   const lastBytes = useRef(null)
   const fileInput = useRef(null)
   const perPage = sheet.cols * sheet.rows
+  const single = docs.length === 1
+  const fileName = single ? docs[0].name : docs.length > 1 ? `${docs.length} PDFs` : ''
+  const MP_NAMES = { amazon: 'Amazon', flipkart: 'Flipkart', myntra: 'Myntra' }
+  const sourceSummary = Object.entries(
+    docs.reduce((m, d) => ({ ...m, [d.source]: (m[d.source] || 0) + 1 }), {}),
+  )
+    .map(([s, n]) => `${n} ${MP_NAMES[s]}`)
+    .join(' · ')
 
   // Apply + persist the theme.
   useEffect(() => {
@@ -106,39 +113,56 @@ export default function App() {
     })
   }
 
-  const handleFile = useCallback(async (file) => {
-    if (!file) return
-    const isPdf =
-      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    if (!isPdf) {
-      setError('Please choose a PDF file.')
-      return
-    }
-    setError('')
-    setFileName(file.name)
-    const buf = await file.arrayBuffer()
-    setBuffer(buf)
-
-    // Auto-detect the marketplace and lock to it. pdf.js detaches the buffer it
-    // reads, so hand it a copy and keep the original for generating output.
-    const mp = await detectMarketplace(buf.slice(0))
-    setDetected(mp)
-    if (mp) {
-      setSource(mp)
-      setLocked(true)
+  // When the batch is exactly one file, wire up the manual marketplace override.
+  const syncSingleOverride = (list) => {
+    if (list.length === 1) {
+      setDetected(list[0].detected)
+      setSource(list[0].detected || 'amazon')
+      setLocked(!!list[0].detected)
     } else {
+      setDetected(null)
       setLocked(false)
     }
+  }
 
-    // For Amazon, measure the real content bounds of each label/invoice so the
-    // crop never clips the top and stays tight on any template.
-    if (mp === 'amazon' || mp === null) {
-      const lay = await analyzeAmazonLayout(buf.slice(0))
-      setLayout(lay)
-    } else {
-      setLayout(null)
-    }
-  }, [])
+  const handleFiles = useCallback(
+    async (fileList) => {
+      const files = Array.from(fileList || []).filter(
+        (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
+      )
+      if (!files.length) {
+        setError('Please choose PDF file(s).')
+        return
+      }
+      setError('')
+
+      // Detect each file's marketplace + (for Amazon) content layout. pdf.js
+      // detaches the buffer it reads, so always hand detection a copy.
+      const newDocs = []
+      for (const file of files) {
+        // Skip files already in the batch (same name + size).
+        if (docs.some((d) => d.name === file.name && d.size === file.size)) continue
+        const buf = await file.arrayBuffer()
+        const mp = await detectMarketplace(buf.slice(0))
+        const layout = mp === 'amazon' || mp === null ? await analyzeAmazonLayout(buf.slice(0)) : null
+        newDocs.push({ name: file.name, size: file.size, buffer: buf, source: mp || 'amazon', detected: mp, layout })
+      }
+      if (!newDocs.length) return // all were duplicates
+
+      const combined = [...docs, ...newDocs]
+      setDocs(combined)
+      syncSingleOverride(combined)
+      if (fileInput.current) fileInput.current.value = ''
+    },
+    [docs],
+  )
+
+  // Remove one file from the batch.
+  const removeDoc = (i) => {
+    const next = docs.filter((_, j) => j !== i)
+    setDocs(next)
+    syncSingleOverride(next)
+  }
 
   const generate = useCallback(async () => {
     // --- Text-label mode ---
@@ -183,31 +207,46 @@ export default function App() {
     }
 
     // --- PDF mode ---
-    if (!buffer) {
+    if (!docs.length) {
       clearPreview()
       return
     }
     setBusy(true)
     setError('')
     try {
-      // Myntra has no bill, so it's always labels-only.
-      const out2 = source === 'myntra' ? 'labels' : output
-      const { bytes, labelCount, billCount, sheetCount } = await buildLabelPdf(
-        buffer.slice(0),
-        {
+      // Single file uses the manual marketplace + crop controls; a batch uses
+      // each file's auto-detected marketplace with sensible default crops.
+      let items
+      let out2
+      if (single) {
+        out2 = source === 'myntra' ? 'labels' : output
+        items = [{
+          arrayBuffer: docs[0].buffer.slice(0),
           source,
           splitRatio: splitPct / 100,
           flipkartCrop: crop,
-          innerPad: Number(innerPad),
-          showOutlines,
-          includeBills: out2 === 'both',
-          billsOnly: out2 === 'bills',
-          pairs: out2 === 'pairs',
-          sheet,
-          startSlot: Math.min(startSlot, perPage - 1),
-          layout: source === 'amazon' ? layout : null,
-        },
-      )
+          layout: source === 'amazon' ? docs[0].layout : null,
+        }]
+      } else {
+        const allMyntra = docs.every((d) => d.source === 'myntra')
+        out2 = allMyntra ? 'labels' : output
+        items = docs.map((d) => ({
+          arrayBuffer: d.buffer.slice(0),
+          source: d.source,
+          splitRatio: 0.5,
+          flipkartCrop: d.source === 'myntra' ? MYNTRA_CROP : FLIPKART_CROP,
+          layout: d.source === 'amazon' ? d.layout : null,
+        }))
+      }
+      const { bytes, labelCount, billCount, sheetCount } = await buildCombinedLabelPdf(items, {
+        innerPad: Number(innerPad),
+        showOutlines,
+        includeBills: out2 === 'both',
+        billsOnly: out2 === 'bills',
+        pairs: out2 === 'pairs',
+        sheet,
+        startSlot: Math.min(startSlot, perPage - 1),
+      })
       lastBytes.current = bytes
       setStats({ labelCount, billCount, sheetCount })
       const blob = new Blob([bytes], { type: 'application/pdf' })
@@ -218,12 +257,12 @@ export default function App() {
       })
     } catch (e) {
       console.error(e)
-      setError('Could not process this PDF: ' + e.message)
+      setError('Could not process the PDF(s): ' + e.message)
       setStats(null)
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, buffer, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, layout, perPage])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -251,13 +290,11 @@ export default function App() {
   // Clear everything and start fresh.
   const clearAll = () => {
     clearPreview()
-    setFileName('')
-    setBuffer(null)
+    setDocs([])
     setError('')
     setSource('amazon')
     setDetected(null)
     setLocked(false)
-    setLayout(null)
     setSizes([{ text: 'S', count: 20 }])
     resetSettings()
     if (fileInput.current) fileInput.current.value = ''
@@ -275,7 +312,7 @@ export default function App() {
             .slice(0, 24)
             .replace(/[^\w-]+/g, '-')
             .replace(/^-+|-+$/g, '') || 'text-labels'
-        : fileName.replace(/\.pdf$/i, '') || 'labels'
+        : (single ? fileName.replace(/\.pdf$/i, '') : 'labels') || 'labels'
     a.href = url
     a.download = base + '_labels.pdf'
     document.body.appendChild(a)
@@ -287,8 +324,7 @@ export default function App() {
   const onDrop = (e) => {
     e.preventDefault()
     setDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    handleFile(file)
+    handleFiles(e.dataTransfer.files)
   }
 
   const setSheetField = (key, value) =>
@@ -406,7 +442,9 @@ export default function App() {
     </>
   )
 
-  const showDownload = mode === 'text' ? true : !!buffer
+  const showDownload = mode === 'text' ? true : docs.length > 0
+  // No bills when the only source(s) are Myntra.
+  const noBills = docs.length > 0 && (single ? source === 'myntra' : docs.every((d) => d.source === 'myntra'))
 
   return (
     <div className="app">
@@ -485,7 +523,7 @@ export default function App() {
               <div className="card">
                 <div className="card__head">
                   <span className="step">1</span>
-                  <h2>Upload your PDF</h2>
+                  <h2>Upload your PDFs</h2>
                 </div>
                 <div
                   className={'drop' + (dragging ? ' drop--active' : '') + (fileName ? ' drop--has' : '')}
@@ -501,8 +539,9 @@ export default function App() {
                     ref={fileInput}
                     type="file"
                     accept="application/pdf,.pdf"
+                    multiple
                     hidden
-                    onChange={(e) => handleFile(e.target.files?.[0])}
+                    onChange={(e) => handleFiles(e.target.files)}
                   />
                   <div className="drop__icon" aria-hidden="true">
                     <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
@@ -511,18 +550,40 @@ export default function App() {
                     </svg>
                   </div>
                   <div className="drop__title">
-                    {fileName ? fileName : 'Drop your Amazon or Flipkart PDF here'}
+                    {docs.length ? `${docs.length} PDF${docs.length > 1 ? 's' : ''} selected` : 'Drop your Amazon, Flipkart or Myntra PDFs here'}
                   </div>
                   <div className="drop__hint">
-                    {fileName ? 'Click to choose a different file' : 'or click to browse'}
+                    {docs.length ? 'Click to add more files' : 'or click to browse — you can pick several at once'}
                   </div>
                 </div>
+
+                {docs.length > 0 && (
+                  <div className="filelist">
+                    {docs.map((d, i) => (
+                      <div className="filelist__row" key={i}>
+                        <span className="filelist__name">{d.name}</span>
+                        <span className="filelist__tag">
+                          {{ amazon: 'Amazon', flipkart: 'Flipkart', myntra: 'Myntra' }[d.source]}
+                          {!d.detected ? '?' : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="filelist__del"
+                          onClick={() => removeDoc(i)}
+                          title="Remove this file"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {error && <div className="error">{error}</div>}
               </div>
 
               {/* Step 2 — Settings */}
-              {buffer && (
+              {docs.length > 0 && (
                 <div className="card">
                   <div className="card__head">
                     <span className="step">2</span>
@@ -530,6 +591,8 @@ export default function App() {
                   </div>
 
                   <div className="controls">
+                    {single ? (
+                    <>
                     <div className="ctrl">
                       <span className="ctrl__label">Marketplace</span>
                       <div className="seg seg--three">
@@ -616,6 +679,16 @@ export default function App() {
                         </small>
                       </div>
                     )}
+                    </>
+                    ) : (
+                      <div className="ctrl">
+                        <span className="ctrl__label">Marketplaces</span>
+                        <small className="hint hint--ok">
+                          Auto-detected per file — <b>{sourceSummary}</b>. All labels are
+                          combined onto the sheets together.
+                        </small>
+                      </div>
+                    )}
 
                     <label className="ctrl">
                       <span className="ctrl__label">
@@ -633,7 +706,7 @@ export default function App() {
 
                     {output !== 'pairs' && startPositionPicker}
 
-                    {source !== 'myntra' && (
+                    {!noBills && (
                     <div className="ctrl">
                       <span className="ctrl__label">What to export</span>
                       <div className="seg seg--grid">

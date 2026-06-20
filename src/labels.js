@@ -69,10 +69,23 @@ export const MYNTRA_CROP = {
  * @returns {Promise<{bytes: Uint8Array, labelCount, billCount, sheetCount}>}
  */
 export async function buildLabelPdf(arrayBuffer, options = {}) {
+  const { source = 'amazon', splitRatio = 0.5, flipkartCrop = FLIPKART_CROP, layout = null, ...rest } = options
+  return buildCombinedLabelPdf([{ arrayBuffer, source, splitRatio, flipkartCrop, layout }], rest)
+}
+
+/**
+ * Build one output PDF from MANY source PDFs at once. Each item carries its own
+ * marketplace + crop/layout, so a batch can even mix Amazon/Flipkart/Myntra.
+ * Labels from every file are packed together onto the sticker sheets; bills are
+ * grouped by their source so each marketplace's invoices lay out correctly.
+ *
+ * @param {Array<{arrayBuffer, source, splitRatio?, flipkartCrop?, layout?}>} items
+ * @param {object} options  shared layout options (innerPad, showOutlines,
+ *        includeBills, billsOnly, pairs, sheet, startSlot)
+ * @returns {Promise<{bytes, labelCount, billCount, sheetCount}>}
+ */
+export async function buildCombinedLabelPdf(items, options = {}) {
   const {
-    source = 'amazon',
-    splitRatio = 0.5,
-    flipkartCrop = FLIPKART_CROP,
     innerPad = 1,
     showOutlines = false,
     includeBills = false,
@@ -80,23 +93,65 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
-    layout = null,
   } = options
 
-  // 'pairs' keeps each order's label + invoice together (label left, bill
-  // right), so we need to collect both region sets.
   const wantLabels = pairs || !billsOnly
   const wantBills = pairs || includeBills || billsOnly
 
-  const src = await PDFDocument.load(arrayBuffer)
   const out = await PDFDocument.create()
-  const srcPages = src.getPages()
+  const allLabels = []
+  const allBills = []
+  const flipkartBills = [] // full-width invoices stack 2 per page
+  const stickerBills = [] // Amazon half-page invoices pack onto sticker sheets
 
-  if (srcPages.length === 0) {
-    throw new Error('The PDF has no pages.')
+  for (const item of items) {
+    const src = await PDFDocument.load(item.arrayBuffer)
+    const srcPages = src.getPages()
+    if (!srcPages.length) continue
+    const source = item.source || 'amazon'
+    const { labelRegions, billRegions } = collectRegions(srcPages, {
+      source,
+      splitRatio: item.splitRatio ?? 0.5,
+      flipkartCrop: item.flipkartCrop || FLIPKART_CROP,
+      layout: item.layout || null,
+      wantBills,
+    })
+    allLabels.push(...labelRegions)
+    allBills.push(...billRegions)
+    if (source === 'flipkart') flipkartBills.push(...billRegions)
+    else stickerBills.push(...billRegions)
   }
 
-  // 1. Collect the label regions (and optionally the bill regions).
+  if (!allLabels.length && !allBills.length) {
+    throw new Error('No pages found in the PDF(s).')
+  }
+
+  if (pairs) {
+    await placePairs(out, allLabels, allBills, 2)
+  } else {
+    if (wantLabels) {
+      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot)
+    }
+    if (wantBills) {
+      if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
+      if (stickerBills.length) await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
+    }
+  }
+
+  const bytes = await out.save()
+  return {
+    bytes,
+    labelCount: wantLabels ? allLabels.length : 0,
+    billCount: wantBills ? allBills.length : 0,
+    sheetCount: out.getPageCount(),
+  }
+}
+
+/**
+ * Collect the label (and optional bill) crop regions for one source PDF,
+ * per its marketplace layout. Regions reference the source pages directly.
+ */
+function collectRegions(srcPages, { source, splitRatio, flipkartCrop, layout, wantBills }) {
   const labelRegions = []
   const billRegions = []
 
@@ -105,57 +160,28 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     const c = flipkartCrop
     for (const page of srcPages) {
       const { width, height } = page.getSize()
-      labelRegions.push({
-        page,
-        left: c.left * width,
-        right: c.right * width,
-        top: height * (1 - c.top),
-        bottom: height * (1 - c.bottom),
-      })
+      labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
     }
   } else if (source === 'flipkart') {
     const c = flipkartCrop
     for (const page of srcPages) {
       const { width, height } = page.getSize()
-      // Convert top-left fractions to PDF coords (origin bottom-left).
-      labelRegions.push({
-        page,
-        left: c.left * width,
-        right: c.right * width,
-        top: height * (1 - c.top),
-        bottom: height * (1 - c.bottom),
-      })
+      labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
       if (wantBills) {
-        // Invoice = everything below the cut line, full width.
-        billRegions.push({
-          page,
-          left: 0,
-          right: width,
-          top: height * (1 - c.bottom),
-          bottom: 0,
-        })
+        billRegions.push({ page, left: 0, right: width, top: height * (1 - c.bottom), bottom: 0 })
       }
     }
   } else if (layout && layout.length === srcPages.length) {
-    // amazon, auto-detected: use the exact ink bounds measured per quadrant.
-    // This never clips the top and keeps every label tight & aligned, whatever
-    // the Amazon template's margins happen to be.
+    // amazon, auto-detected: exact ink bounds per quadrant (never clips the top).
     srcPages.forEach((page, i) => {
       const entry = layout[i] || { labels: [], bills: [] }
-      for (const b of entry.labels) {
-        labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
-      }
-      if (wantBills) {
-        for (const b of entry.bills) {
-          billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
-        }
-      }
+      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
+      if (wantBills) for (const b of entry.bills) billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
     })
   } else {
-    // amazon fallback (detection unavailable): split each page into a 2x2 grid
-    // by fixed fractions. Labels = left column, invoices = right column.
-    const A1 = { top: 0.0, bottom: 0.5 } // label, order 1 (upper half)
-    const A2 = { top: 0.5, bottom: 1.0 } // label, order 2 (lower half)
+    // amazon fallback (no detection): split each page into a 2x2 grid by fractions.
+    const A1 = { top: 0.0, bottom: 0.5 }
+    const A2 = { top: 0.5, bottom: 1.0 }
     for (const page of srcPages) {
       const { width, height } = page.getSize()
       const labelW = width * splitRatio
@@ -168,38 +194,7 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
     }
   }
 
-  if (pairs) {
-    // Keep each order together: label on the LEFT, its invoice on the RIGHT,
-    // two orders stacked per A4 page (mirrors the original Amazon sheet).
-    await placePairs(out, labelRegions, billRegions, 2)
-  } else {
-    // 2. Place labels onto sticker sheets (unless we only want bills). The
-    //    startSlot lets the user skip stickers already peeled off the first sheet.
-    if (wantLabels) {
-      await placeOnSheets(out, labelRegions, sheet, innerPad, showOutlines, startSlot)
-    }
-
-    // 3. Output the bills. Amazon invoices are half-page and pack 4 to a sticker
-    //    sheet nicely. Flipkart invoices are full-width, so we stack 2 whole
-    //    invoices per A4 page — each bill is always kept whole on one page, never
-    //    split across two pages. The startSlot applies here too so bills can be
-    //    positioned just like labels (each is still kept whole, never split).
-    if (wantBills && billRegions.length) {
-      if (source === 'flipkart') {
-        await placeStacked(out, billRegions, 2, startSlot % 2)
-      } else {
-        await placeOnSheets(out, billRegions, sheet, innerPad, showOutlines, startSlot)
-      }
-    }
-  }
-
-  const bytes = await out.save()
-  return {
-    bytes,
-    labelCount: wantLabels ? labelRegions.length : 0,
-    billCount: wantBills ? billRegions.length : 0,
-    sheetCount: out.getPageCount(),
-  }
+  return { labelRegions, billRegions }
 }
 
 /**

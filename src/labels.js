@@ -93,6 +93,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
+    hAlign = 'center', // 'center' | 'outer' (push labels to the outer column edge)
   } = options
 
   const wantLabels = pairs || !billsOnly
@@ -130,7 +131,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     await placePairs(out, allLabels, allBills, 2)
   } else {
     if (wantLabels) {
-      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot)
+      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign)
     }
     if (wantBills) {
       if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
@@ -203,7 +204,7 @@ function collectRegions(srcPages, { source, splitRatio, flipkartCrop, layout, wa
  * ratio and centered. Always starts a fresh page, so labels and bills stay on
  * separate sheets.
  */
-async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0) {
+async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0, hAlign = 'center') {
   const perPage = sheet.cols * sheet.rows
   const pageW = sheet.pageW * MM
   const pageH = sheet.pageH * MM
@@ -263,7 +264,16 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const scale = Math.min(availW / regW, availH / regH)
     const drawW = regW * scale
     const drawH = regH * scale
-    const x = cellLeft + (labelW - drawW) / 2
+    // Horizontal placement. 'center' centers in the sticker; 'outer' pushes the
+    // label toward the OUTER edge of its column (left column → left, right
+    // column → right) so narrow labels don't crowd the centre cut line.
+    let x
+    if (hAlign === 'outer') {
+      const leftHalf = col < sheet.cols / 2
+      x = leftHalf ? cellLeft + pad : cellLeft + labelW - drawW - pad
+    } else {
+      x = cellLeft + (labelW - drawW) / 2
+    }
     // Top-align inside the sticker so labels in the same row line up exactly.
     const y = cellBottom + labelH - drawH - pad
 

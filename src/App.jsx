@@ -218,6 +218,7 @@ export default function App() {
       // each file's auto-detected marketplace with sensible default crops.
       let items
       let out2
+      const allMyntra = single ? source === 'myntra' : docs.every((d) => d.source === 'myntra')
       if (single) {
         out2 = source === 'myntra' ? 'labels' : output
         items = [{
@@ -228,7 +229,6 @@ export default function App() {
           layout: source === 'amazon' ? docs[0].layout : null,
         }]
       } else {
-        const allMyntra = docs.every((d) => d.source === 'myntra')
         out2 = allMyntra ? 'labels' : output
         items = docs.map((d) => ({
           arrayBuffer: d.buffer.slice(0),
@@ -246,6 +246,9 @@ export default function App() {
         pairs: out2 === 'pairs',
         sheet,
         startSlot: Math.min(startSlot, perPage - 1),
+        // Myntra labels are narrow — push them to the outer column edge so they
+        // don't crowd the centre cut line.
+        hAlign: allMyntra ? 'outer' : 'center',
       })
       lastBytes.current = bytes
       setStats({ labelCount, billCount, sheetCount })

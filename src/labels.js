@@ -3,6 +3,11 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 // 72 PDF points = 1 inch = 25.4 mm.
 const MM = 72 / 25.4
 
+// Extra clearance (mm) between a sticker's top edge and the label artwork, on
+// top of the regular inner padding — keeps the bottom row from hugging the
+// horizontal cut line. The label shrinks to fit, so it never overflows.
+const TOP_GAP = 2
+
 // Default template: Avery L7169 / J8169 — sold in India as "A4 ST4".
 // A4 page, 4 labels (2 cols x 2 rows), each 99.1 x 139 mm. All values in mm.
 export const DEFAULT_SHEET = {
@@ -260,7 +265,7 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
 
     // Fit the artwork inside the sticker (minus padding), keeping aspect ratio.
     const availW = labelW - pad * 2
-    const availH = labelH - pad * 2
+    const availH = labelH - pad * 2 - TOP_GAP * MM
     const scale = Math.min(availW / regW, availH / regH)
     const drawW = regW * scale
     const drawH = regH * scale
@@ -275,7 +280,7 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
       x = cellLeft + (labelW - drawW) / 2
     }
     // Top-align inside the sticker so labels in the same row line up exactly.
-    const y = cellBottom + labelH - drawH - pad
+    const y = cellBottom + labelH - drawH - pad - TOP_GAP * MM
 
     outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
   }

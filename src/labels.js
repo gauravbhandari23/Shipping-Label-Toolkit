@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
+import { encodeBarcode, QUIET_MODULES } from './barcode'
 
 // 72 PDF points = 1 inch = 25.4 mm.
 const MM = 72 / 25.4
@@ -405,6 +406,148 @@ export async function buildTextLabelPdf(options = {}) {
 
   const bytes = await out.save()
   return { bytes, labelCount: n, sheetCount: out.getPageCount() }
+}
+
+// Widest a single barcode module (the "X dimension") is allowed to get. Without
+// a cap, a short code would blow up to bars several mm wide on a big sticker —
+// legal, but it wastes the sticker and looks wrong. 1 mm is the top of the
+// usual X-dimension range.
+const MAX_MODULE_MM = 1
+
+/**
+ * Build a sheet of BARCODE stickers. Each entry is a value + how many copies to
+ * print; they're packed onto the same sticker grid the other modes use.
+ *
+ * Bars are drawn as vector rectangles, so they stay razor-sharp at any size —
+ * which is what a scanner needs.
+ *
+ * @param {object} options
+ * @param {Array}   options.entries       [{text, count}] — value and how many copies
+ * @param {string}  options.symbology     'code128' (default) | 'code39'
+ * @param {boolean} options.showText      print the value under the bars (default true)
+ * @param {boolean} options.bold          bold the caption
+ * @param {object}  options.sheet         sticker template in mm (see DEFAULT_SHEET)
+ * @param {number}  options.startSlot     first sticker position to fill
+ * @param {boolean} options.showOutlines  draw a thin border at each position
+ * @param {number}  options.innerPad      mm of quiet space inside each sticker
+ * @param {number}  options.barHeightPct  bar height as a % of the usable sticker height
+ * @returns {Promise<{bytes: Uint8Array, labelCount, sheetCount}>}
+ */
+export async function buildBarcodeLabelPdf(options = {}) {
+  const {
+    entries = [],
+    symbology = 'code128',
+    showText = true,
+    bold = false,
+    sheet = DEFAULT_SHEET,
+    startSlot = 0,
+    showOutlines = false,
+    innerPad = 2,
+    barHeightPct = 55,
+  } = options
+
+  const out = await PDFDocument.create()
+  const font = await out.embedFont(bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica)
+
+  const perPage = sheet.cols * sheet.rows
+  const pageW = sheet.pageW * MM
+  const pageH = sheet.pageH * MM
+  const labelW = sheet.labelW * MM
+  const labelH = sheet.labelH * MM
+  const mTop = sheet.marginTop * MM
+  const mLeft = sheet.marginLeft * MM
+  const gapX = sheet.gapX * MM
+  const gapY = sheet.gapY * MM
+  const pad = innerPad * MM
+  const offset = ((startSlot % perPage) + perPage) % perPage
+
+  // One sticker per copy, each entry's copies kept together in the order given.
+  const items = entries.flatMap((e) =>
+    Array(Math.max(0, Math.floor(e.count || 0))).fill(String(e.text ?? '')),
+  )
+  const n = items.length
+  if (!n) return { bytes: await out.save(), labelCount: 0, sheetCount: 0 }
+
+  // Encode up front so a bad character fails before we draw anything.
+  const encoded = new Map()
+  for (const t of new Set(items)) encoded.set(t, encodeBarcode(t, symbology))
+
+  const availW = labelW - pad * 2
+  const availH = labelH - pad * 2
+  const quiet = QUIET_MODULES[symbology] ?? 10
+  const gapUnderBars = 1.2 * MM
+  const barH = Math.max(0, availH * (Math.min(100, Math.max(10, barHeightPct)) / 100))
+  const textBox = showText ? Math.max(0, availH - barH - gapUnderBars) : 0
+
+  // One caption size for every sticker, so the whole sheet reads evenly.
+  let capSize = Math.min(textBox / 1.15, 40)
+  if (showText && capSize >= 4) {
+    for (const t of new Set(items)) capSize = Math.min(capSize, fitFontSize(font, t, capSize, availW, textBox))
+  }
+  const capH = showText && capSize >= 4 ? capSize * 1.15 : 0
+
+  let page = null
+  for (let k = 0; k < n; k++) {
+    const slot = (offset + k) % perPage
+    if (k === 0 || slot === 0) page = out.addPage([pageW, pageH])
+
+    const col = slot % sheet.cols
+    const row = Math.floor(slot / sheet.cols)
+    const cellLeft = mLeft + col * (labelW + gapX)
+    const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
+
+    if (showOutlines) {
+      page.drawRectangle({ x: cellLeft, y: cellBottom, width: labelW, height: labelH, borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 0.5 })
+    }
+
+    const bits = encoded.get(items[k])
+    if (!bits) continue
+
+    // Fit the symbol (plus its quiet zones) across the sticker, capped so the
+    // bars of a short code don't balloon.
+    const totalModules = bits.length + quiet * 2
+    const moduleW = Math.min(availW / totalModules, MAX_MODULE_MM * MM)
+    const drawW = moduleW * totalModules
+
+    // Centre the bars + caption block vertically inside the sticker.
+    const blockH = barH + (capH ? gapUnderBars + capH : 0)
+    const blockBottom = cellBottom + pad + (availH - blockH) / 2
+    const barsBottom = blockBottom + (capH ? gapUnderBars + capH : 0)
+    const barsLeft = cellLeft + pad + (availW - drawW) / 2 + quiet * moduleW
+
+    drawBars(page, bits, barsLeft, barsBottom, moduleW, barH)
+
+    if (capH) {
+      drawCenteredText(page, font, items[k], capSize, 'center', cellLeft + pad, blockBottom, availW, capH)
+    }
+  }
+
+  const bytes = await out.save()
+  return { bytes, labelCount: n, sheetCount: out.getPageCount() }
+}
+
+/**
+ * Draw a module string ('1' = bar, '0' = space) as black rectangles, one per run
+ * of bars, starting at (x, y) and growing right. Vector output — no blur.
+ */
+function drawBars(page, bits, x, y, moduleW, height) {
+  let i = 0
+  while (i < bits.length) {
+    if (bits[i] === '1') {
+      let run = 1
+      while (bits[i + run] === '1') run++
+      page.drawRectangle({
+        x: x + i * moduleW,
+        y,
+        width: run * moduleW,
+        height,
+        color: rgb(0, 0, 0),
+      })
+      i += run
+    } else {
+      i++
+    }
+  }
 }
 
 /**

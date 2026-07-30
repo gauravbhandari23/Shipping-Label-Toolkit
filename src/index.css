@@ -517,6 +517,14 @@ input[type='range']::-webkit-slider-thumb:active {
   max-width: 130px;
 }
 
+/* Barcode values are codes, not prose — monospace keeps 0/O and 1/l apart. */
+.textinput--code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  min-height: 0;
+}
+
 /* ---------- Uploaded file list (batch) ---------- */
 .filelist {
   margin-top: 12px;

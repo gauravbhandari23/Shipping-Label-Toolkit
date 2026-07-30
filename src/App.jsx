@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { buildLabelPdf, buildCombinedLabelPdf, buildTextLabelPdf, DEFAULT_SHEET, FLIPKART_CROP, MYNTRA_CROP } from './labels'
+import {
+  buildLabelPdf,
+  buildCombinedLabelPdf,
+  buildTextLabelPdf,
+  buildBarcodeLabelPdf,
+  DEFAULT_SHEET,
+  FLIPKART_CROP,
+  MYNTRA_CROP,
+} from './labels'
 import { detectMarketplace } from './detect'
 import { analyzeAmazonLayout } from './layout'
 import logo from './assets/rangrooh-logo.png'
@@ -24,6 +32,10 @@ function gridSheet(totalCols, totalRows, margin) {
   }
 }
 
+// Prefilled in the barcode box so the tab previews something straight away —
+// just type over it.
+const DEFAULT_CODE = 'MPP3DP000143600'
+
 // Quick presets for how many small labels to tile INSIDE each pre-cut part.
 const GRID_PRESETS = [
   [2, 2],
@@ -33,7 +45,7 @@ const GRID_PRESETS = [
 ]
 
 export default function App() {
-  const [mode, setMode] = useState('pdf') // 'pdf' | 'text'
+  const [mode, setMode] = useState('pdf') // 'pdf' | 'text' | 'barcode'
   // Uploaded PDFs: [{ name, buffer, source, detected, layout }]. One or many.
   const [docs, setDocs] = useState([])
   const [pdfUrl, setPdfUrl] = useState('')
@@ -71,6 +83,12 @@ export default function App() {
   const [gridRows, setGridRows] = useState(5)
   const [textPad, setTextPad] = useState(1.5)
   const [gridMargin, setGridMargin] = useState(5) // mm — page margin for the dense grid
+
+  // Barcode-mode controls (layout/padding settings are shared with text mode)
+  const [codes, setCodes] = useState([{ text: DEFAULT_CODE, count: 20 }]) // [{text, count}]
+  const [symbology, setSymbology] = useState('code128') // 'code128' | 'code39'
+  const [showCodeText, setShowCodeText] = useState(true)
+  const [barHeightPct, setBarHeightPct] = useState(45)
 
   const lastBytes = useRef(null)
   const fileInput = useRef(null)
@@ -206,6 +224,49 @@ export default function App() {
       return
     }
 
+    // --- Barcode mode ---
+    if (mode === 'barcode') {
+      const entries = codes
+        .map((c) => ({ text: c.text.trim(), count: Math.max(0, Math.floor(Number(c.count) || 0)) }))
+        .filter((c) => c.text && c.count > 0)
+      if (!entries.length) {
+        clearPreview()
+        setError('')
+        return
+      }
+      setBusy(true)
+      setError('')
+      try {
+        const isGrid = textLayout === 'grid'
+        const bcSheet = isGrid ? gridSheet(2 * gridCols, 2 * gridRows, gridMargin) : sheet
+        const { bytes, labelCount, sheetCount } = await buildBarcodeLabelPdf({
+          entries,
+          symbology,
+          showText: showCodeText,
+          barHeightPct,
+          sheet: bcSheet,
+          startSlot: isGrid ? 0 : Math.min(startSlot, perPage - 1),
+          showOutlines,
+          innerPad: Number(textPad),
+        })
+        lastBytes.current = bytes
+        setStats({ labelCount, billCount: 0, sheetCount })
+        const blob = new Blob([bytes], { type: 'application/pdf' })
+        const url = URL.createObjectURL(blob)
+        setPdfUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return url
+        })
+      } catch (e) {
+        console.error(e)
+        setError(e.message || 'Could not make the barcodes.')
+        setStats(null)
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     // --- PDF mode ---
     if (!docs.length) {
       clearPreview()
@@ -265,7 +326,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -288,6 +349,9 @@ export default function App() {
     setGridRows(5)
     setTextPad(1.5)
     setGridMargin(5)
+    setSymbology('code128')
+    setShowCodeText(true)
+    setBarHeightPct(45)
   }
 
   // Clear everything and start fresh.
@@ -299,6 +363,7 @@ export default function App() {
     setDetected(null)
     setLocked(false)
     setSizes([{ text: 'S', count: 20 }])
+    setCodes([{ text: DEFAULT_CODE, count: 20 }])
     resetSettings()
     if (fileInput.current) fileInput.current.value = ''
   }
@@ -308,14 +373,19 @@ export default function App() {
     const blob = new Blob([lastBytes.current], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
+    // Name the file after the first typed value (text/barcode) or the source PDF.
+    const slug = (s, fallback) =>
+      String(s || '')
+        .trim()
+        .slice(0, 24)
+        .replace(/[^\w-]+/g, '-')
+        .replace(/^-+|-+$/g, '') || fallback
     const base =
       mode === 'text'
-        ? (sizes.find((s) => s.text.trim())?.text || 'text')
-            .trim()
-            .slice(0, 24)
-            .replace(/[^\w-]+/g, '-')
-            .replace(/^-+|-+$/g, '') || 'text-labels'
-        : (single ? fileName.replace(/\.pdf$/i, '') : 'labels') || 'labels'
+        ? slug(sizes.find((s) => s.text.trim())?.text, 'text-labels')
+        : mode === 'barcode'
+          ? slug(codes.find((c) => c.text.trim())?.text, 'barcodes')
+          : (single ? fileName.replace(/\.pdf$/i, '') : 'labels') || 'labels'
     a.href = url
     a.download = base + '_labels.pdf'
     document.body.appendChild(a)
@@ -365,6 +435,14 @@ export default function App() {
   const removeSize = (i) =>
     setSizes((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))
 
+  // Same three helpers for the barcode rows (each row = one value + its count).
+  const codeQty = codes.reduce((a, c) => a + Math.max(0, Math.floor(Number(c.count) || 0)), 0)
+  const updateCode = (i, key, val) =>
+    setCodes((arr) => arr.map((c, j) => (j === i ? { ...c, [key]: val } : c)))
+  const addCode = () => setCodes((arr) => [...arr, { text: '', count: 10 }])
+  const removeCode = (i) =>
+    setCodes((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))
+
   // Shared: the start-position picker (which sticker to start on).
   const startPositionPicker = (
     <div className="ctrl">
@@ -403,6 +481,105 @@ export default function App() {
         output starts there and fills onward. Crossed-out spots are skipped.
       </small>
     </div>
+  )
+
+  // Shared by text + barcode modes: one sticker per pre-cut part, or a dense
+  // grid inside each part (with its own page margin).
+  const stickerLayoutControls = (
+    <>
+      <div className="ctrl">
+        <span className="ctrl__label">Layout</span>
+        <div className="seg">
+          {[
+            ['st4', '1 per part'],
+            ['grid', 'Grid in each part'],
+          ].map(([val, label]) => (
+            <button
+              key={val}
+              type="button"
+              className={'seg__btn' + (textLayout === val ? ' seg__btn--on' : '')}
+              onClick={() => setTextLayout(val)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {textLayout === 'st4' ? (
+          <small className="hint">
+            One label on each of the 4 pre-cut stickers (99 × 139 mm).
+          </small>
+        ) : (
+          <small className="hint">
+            Fills the whole A4 with an even grid (its centre lines line up
+            with your 4 pre-cut stickers). Lower the margin to fit more.
+          </small>
+        )}
+      </div>
+
+      {textLayout === 'grid' && (
+        <>
+          <div className="ctrl">
+            <span className="ctrl__label">Labels in each pre-cut part</span>
+            <div className="field-grid">
+              <label className="field">
+                <span>Columns</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={gridCols}
+                  onChange={(e) => setGridCols(Math.max(1, Math.min(12, Math.round(Number(e.target.value) || 1))))}
+                />
+              </label>
+              <label className="field">
+                <span>Rows</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={gridRows}
+                  onChange={(e) => setGridRows(Math.max(1, Math.min(20, Math.round(Number(e.target.value) || 1))))}
+                />
+              </label>
+            </div>
+            <div className="presets">
+              {GRID_PRESETS.map(([c, r]) => (
+                <button
+                  key={`${c}x${r}`}
+                  type="button"
+                  className={'preset' + (gridCols === c && gridRows === r ? ' preset--on' : '')}
+                  onClick={() => {
+                    setGridCols(c)
+                    setGridRows(r)
+                  }}
+                >
+                  {perPage * c * r} <span>({c}×{r}/part)</span>
+                </button>
+              ))}
+            </div>
+            <small className="hint">
+              {gridCols} × {gridRows} = <b>{gridCols * gridRows}</b> per part →{' '}
+              <b>{textPerPage}</b> per full A4. Fills top-to-bottom.
+            </small>
+          </div>
+
+          <label className="ctrl">
+            <span className="ctrl__label">
+              Page margin <b className="val">{gridMargin} mm</b>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="15"
+              step="0.5"
+              value={gridMargin}
+              onChange={(e) => setGridMargin(Number(e.target.value))}
+            />
+            <small className="hint">Lower it to use more of the page and fit bigger / more stickers.</small>
+          </label>
+        </>
+      )}
+    </>
   )
 
   // Shared: fine-tune the sheet grid / margins.
@@ -445,7 +622,7 @@ export default function App() {
     </>
   )
 
-  const showDownload = mode === 'text' ? true : docs.length > 0
+  const showDownload = mode === 'pdf' ? docs.length > 0 : true
   // No bills when the only source(s) are Myntra.
   const noBills = docs.length > 0 && (single ? source === 'myntra' : docs.every((d) => d.source === 'myntra'))
 
@@ -489,12 +666,12 @@ export default function App() {
       </header>
 
       <section className="hero">
-        <span className="hero__pill">Amazon · Flipkart · Myntra · A4 ST4 sticker sheets</span>
+        <span className="hero__pill">Amazon · Flipkart · Myntra · Text · Barcodes · A4 ST4 sheets</span>
         <h1>Print clean labels in seconds.</h1>
         <p>
           Turn an Amazon, Flipkart or Myntra label PDF into tidy shipping labels on
-          A4 sticker sheets — or print your own repeated text labels. Everything runs
-          in your browser; nothing is ever uploaded.
+          A4 sticker sheets — or print your own text labels and scannable barcodes.
+          Everything runs in your browser; nothing is ever uploaded.
         </p>
       </section>
 
@@ -502,10 +679,11 @@ export default function App() {
         <div className="col col--left">
           {/* Mode toggle */}
           <div className="card mode-card">
-            <div className="seg">
+            <div className="seg seg--three">
               {[
                 ['pdf', 'From a PDF'],
                 ['text', 'Text labels'],
+                ['barcode', 'Barcodes'],
               ].map(([val, label]) => (
                 <button
                   key={val}
@@ -816,98 +994,7 @@ export default function App() {
                   </small>
                 </div>
 
-                <div className="ctrl">
-                  <span className="ctrl__label">Layout</span>
-                  <div className="seg">
-                    {[
-                      ['st4', '1 per part'],
-                      ['grid', 'Grid in each part'],
-                    ].map(([val, label]) => (
-                      <button
-                        key={val}
-                        type="button"
-                        className={'seg__btn' + (textLayout === val ? ' seg__btn--on' : '')}
-                        onClick={() => setTextLayout(val)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {textLayout === 'st4' ? (
-                    <small className="hint">
-                      One label on each of the 4 pre-cut stickers (99 × 139 mm).
-                    </small>
-                  ) : (
-                    <small className="hint">
-                      Fills the whole A4 with an even grid (its centre lines line up
-                      with your 4 pre-cut stickers). Lower the margin to fit more.
-                    </small>
-                  )}
-                </div>
-
-                {textLayout === 'grid' && (
-                  <div className="ctrl">
-                    <span className="ctrl__label">Labels in each pre-cut part</span>
-                    <div className="field-grid">
-                      <label className="field">
-                        <span>Columns</span>
-                        <input
-                          type="number"
-                          min="1"
-                          max="12"
-                          value={gridCols}
-                          onChange={(e) => setGridCols(Math.max(1, Math.min(12, Math.round(Number(e.target.value) || 1))))}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Rows</span>
-                        <input
-                          type="number"
-                          min="1"
-                          max="20"
-                          value={gridRows}
-                          onChange={(e) => setGridRows(Math.max(1, Math.min(20, Math.round(Number(e.target.value) || 1))))}
-                        />
-                      </label>
-                    </div>
-                    <div className="presets">
-                      {GRID_PRESETS.map(([c, r]) => (
-                        <button
-                          key={`${c}x${r}`}
-                          type="button"
-                          className={'preset' + (gridCols === c && gridRows === r ? ' preset--on' : '')}
-                          onClick={() => {
-                            setGridCols(c)
-                            setGridRows(r)
-                          }}
-                        >
-                          {perPage * c * r} <span>({c}×{r}/part)</span>
-                        </button>
-                      ))}
-                    </div>
-                    <small className="hint">
-                      {gridCols} × {gridRows} = <b>{gridCols * gridRows}</b> per part →{' '}
-                      <b>{textPerPage}</b> per full A4. Fills top-to-bottom.
-                    </small>
-                  </div>
-                )}
-
-                {textLayout === 'grid' && (
-                  <label className="ctrl">
-                    <span className="ctrl__label">
-                      Page margin <b className="val">{gridMargin} mm</b>
-                    </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="15"
-                      step="0.5"
-                      value={gridMargin}
-                      onChange={(e) => setGridMargin(Number(e.target.value))}
-                    />
-                    <small className="hint">Lower it to use more of the page and fit bigger / more stickers.</small>
-                  </label>
-                )}
+                {stickerLayoutControls}
 
                 <label className="ctrl">
                   <span className="ctrl__label">
@@ -973,6 +1060,155 @@ export default function App() {
             </div>
           )}
 
+          {/* ---------------- BARCODE MODE ---------------- */}
+          {mode === 'barcode' && (
+            <div className="card">
+              <div className="card__head">
+                <span className="step">1</span>
+                <h2>Your barcodes</h2>
+              </div>
+
+              <div className="controls">
+                <div className="ctrl">
+                  <span className="ctrl__label">What to encode — and how many of each</span>
+                  <div className="sizelist">
+                    <div className="sizerow sizerow--head">
+                      <span>Value</span>
+                      <span>Qty</span>
+                      <span />
+                    </div>
+                    {codes.map((c, i) => (
+                      <div className="sizerow" key={i}>
+                        <input
+                          className="textinput textinput--code"
+                          type="text"
+                          placeholder="e.g. RG-1024 or 8901234567890"
+                          value={c.text}
+                          onChange={(e) => updateCode(i, 'text', e.target.value)}
+                        />
+                        <input
+                          className="numinput"
+                          type="number"
+                          min="0"
+                          max="2000"
+                          value={c.count}
+                          onChange={(e) => updateCode(i, 'count', Math.max(0, Math.min(2000, Math.round(Number(e.target.value) || 0))))}
+                        />
+                        <button
+                          type="button"
+                          className="rowdel"
+                          onClick={() => removeCode(i)}
+                          disabled={codes.length === 1}
+                          title="Remove this barcode"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" className="addrow" onClick={addCode}>
+                    + Add barcode
+                  </button>
+                  <small className="hint">
+                    <b>{codeQty}</b> stickers → <b>{sheetsFor(codeQty)}</b> sheet
+                    {sheetsFor(codeQty) > 1 ? 's' : ''} ({textPerPage} per A4). Each value is
+                    grouped together.
+                  </small>
+                </div>
+
+                <div className="ctrl">
+                  <span className="ctrl__label">Barcode type</span>
+                  <div className="seg">
+                    {[
+                      ['code128', 'Code 128'],
+                      ['code39', 'Code 39'],
+                    ].map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={'seg__btn' + (symbology === val ? ' seg__btn--on' : '')}
+                        onClick={() => setSymbology(val)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <small className="hint">
+                    {symbology === 'code128'
+                      ? 'Code 128 — the usual choice. Letters, digits, spaces and symbols; digits pack in extra tight.'
+                      : 'Code 39 — older scanners. A–Z, 0–9, space and - . $ / + % only (lowercase is capitalised).'}
+                  </small>
+                </div>
+
+                {stickerLayoutControls}
+
+                <label className="ctrl">
+                  <span className="ctrl__label">
+                    Bar height <b className="val">{barHeightPct}%</b>
+                  </span>
+                  <input
+                    type="range"
+                    min="20"
+                    max="90"
+                    step="5"
+                    value={barHeightPct}
+                    onChange={(e) => setBarHeightPct(Number(e.target.value))}
+                  />
+                  <small className="hint">
+                    Share of the sticker used by the bars. Taller bars are easier to scan;
+                    the rest is left for the printed value.
+                  </small>
+                </label>
+
+                <label className="ctrl">
+                  <span className="ctrl__label">
+                    Padding inside each sticker <b className="val">{textPad} mm</b>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="6"
+                    step="0.5"
+                    value={textPad}
+                    onChange={(e) => setTextPad(Number(e.target.value))}
+                  />
+                  <small className="hint">
+                    Bars stretch to fill the width, keeping the blank quiet zone each side
+                    that scanners need.
+                  </small>
+                </label>
+
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={showCodeText}
+                    onChange={(e) => setShowCodeText(e.target.checked)}
+                  />
+                  <span className="switch__track" />
+                  <span className="switch__text">Print the value under the bars</span>
+                </label>
+
+                {textLayout === 'st4' && startPositionPicker}
+
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={showOutlines}
+                    onChange={(e) => setShowOutlines(e.target.checked)}
+                  />
+                  <span className="switch__track" />
+                  <span className="switch__text">
+                    {textLayout === 'grid' ? 'Show cut lines' : 'Show outlines (for a test print)'}
+                  </span>
+                </label>
+
+                {textLayout === 'st4' && fineTuneControls}
+
+                {error && <div className="error">{error}</div>}
+              </div>
+            </div>
+          )}
+
           {/* Download (shared) */}
           {showDownload && (
             <div className="card card--cta">
@@ -1002,7 +1238,7 @@ export default function App() {
 
               {stats && (
                 <div className="stats">
-                  <b>{stats.labelCount}</b> {mode === 'text' ? 'stickers' : 'labels'}
+                  <b>{stats.labelCount}</b> {mode === 'pdf' ? 'labels' : 'stickers'}
                   {stats.billCount > 0 ? (
                     <>
                       {' '}+ <b>{stats.billCount}</b> bills
@@ -1037,7 +1273,9 @@ export default function App() {
                   <p>
                     {mode === 'text'
                       ? 'Type your text and it will preview here.'
-                      : 'Your finished labels will preview here.'}
+                      : mode === 'barcode'
+                        ? 'Type a value and its barcode will preview here.'
+                        : 'Your finished labels will preview here.'}
                   </p>
                 </div>
               )}

@@ -85,7 +85,7 @@ export default function App() {
   const [gridMargin, setGridMargin] = useState(5) // mm — page margin for the dense grid
 
   // Barcode-mode controls (layout/padding settings are shared with text mode)
-  const [codes, setCodes] = useState([{ text: DEFAULT_CODE, count: 20 }]) // [{text, count}]
+  const [codes, setCodes] = useState([{ text: DEFAULT_CODE, count: 1 }]) // [{text, count}]
   const [symbology, setSymbology] = useState('code128') // 'code128' | 'code39'
   const [showCodeText, setShowCodeText] = useState(true)
   const [barHeightPct, setBarHeightPct] = useState(45)
@@ -363,7 +363,7 @@ export default function App() {
     setDetected(null)
     setLocked(false)
     setSizes([{ text: 'S', count: 20 }])
-    setCodes([{ text: DEFAULT_CODE, count: 20 }])
+    setCodes([{ text: DEFAULT_CODE, count: 1 }])
     resetSettings()
     if (fileInput.current) fileInput.current.value = ''
   }
@@ -439,7 +439,7 @@ export default function App() {
   const codeQty = codes.reduce((a, c) => a + Math.max(0, Math.floor(Number(c.count) || 0)), 0)
   const updateCode = (i, key, val) =>
     setCodes((arr) => arr.map((c, j) => (j === i ? { ...c, [key]: val } : c)))
-  const addCode = () => setCodes((arr) => [...arr, { text: '', count: 10 }])
+  const addCode = () => setCodes((arr) => [...arr, { text: '', count: 1 }])
   const removeCode = (i) =>
     setCodes((arr) => (arr.length > 1 ? arr.filter((_, j) => j !== i) : arr))
 

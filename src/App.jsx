@@ -969,8 +969,8 @@ export default function App() {
                         <small className="hint">
                           Drop the shipping labels and the tax invoices in together. Each
                           label is matched to its own bill by the buyer&rsquo;s address, then
-                          all labels print first and the bills follow on their own pages,
-                          in the same order.
+                          all labels print first and the bills follow on their own sheets,
+                          4 to a page, in the same order.
                         </small>
 
                         {myntraPair && pairBusy && (

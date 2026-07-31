@@ -147,8 +147,11 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     }
     if (wantBills) {
       // Myntra invoices go first among the bills so they line up 1:1 with the
-      // label order the sheets were just packed in.
-      if (myntraBills.length) await placeFullPage(out, myntraBills)
+      // label order the sheets were just packed in. They pack 4-up on the same
+      // grid as the labels, always from the top-left — startSlot only exists to
+      // skip stickers already peeled off a sheet, and these print on plain
+      // paper, so honouring it here would just waste a corner of every page.
+      if (myntraBills.length) await placeOnSheets(out, myntraBills, sheet, innerPad, showOutlines, 0)
       if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
       if (stickerBills.length) await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
     }
@@ -338,39 +341,6 @@ async function placeStacked(out, regions, rows, startBand = 0) {
     const x = (pageW - drawW) / 2
     const y = bandBottom + (bandH - drawH) / 2
     page.drawPage(embedded, { x, y, width: drawW, height: drawH })
-  }
-}
-
-/**
- * Give each region an A4 page of its own, fitted whole and centered. Used for
- * Myntra tax invoices, which are already full pages — so the first one starts a
- * fresh page after the label sheets, and each invoice stays readable at
- * roughly its original size.
- */
-async function placeFullPage(out, regions, margin = 6) {
-  const pageW = 210 * MM
-  const pageH = 297 * MM
-  const m = margin * MM
-
-  for (const r of regions) {
-    const page = out.addPage([pageW, pageH])
-    const embedded = await out.embedPage(r.page, {
-      left: r.left,
-      bottom: r.bottom,
-      right: r.right,
-      top: r.top,
-    })
-    const regW = r.right - r.left
-    const regH = r.top - r.bottom
-    const scale = Math.min((pageW - m * 2) / regW, (pageH - m * 2) / regH)
-    const drawW = regW * scale
-    const drawH = regH * scale
-    page.drawPage(embedded, {
-      x: (pageW - drawW) / 2,
-      y: (pageH - drawH) / 2,
-      width: drawW,
-      height: drawH,
-    })
   }
 }
 

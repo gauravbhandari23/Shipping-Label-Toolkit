@@ -10,6 +10,7 @@ import {
 } from './labels'
 import { detectMarketplace } from './detect'
 import { analyzeAmazonLayout } from './layout'
+import { readMyntraDoc, pairMyntraDocs } from './myntra'
 import logo from './assets/rangrooh-logo.png'
 
 // A page-filling grid: divides the A4 into totalCols×totalRows even cells with a
@@ -74,6 +75,13 @@ export default function App() {
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
   const [startSlot, setStartSlot] = useState(0) // first sticker position to fill
 
+  // Myntra label↔bill pairing (Myntra only — its label and invoice are two
+  // separate PDFs). Off by default; everything else behaves exactly as before.
+  const [myntraPair, setMyntraPair] = useState(false)
+  const [pairInfo, setPairInfo] = useState(null) // {pairs, unmatchedLabels, unmatchedBills}
+  const [pairBusy, setPairBusy] = useState(false)
+  const [pairProgress, setPairProgress] = useState({ done: 0, total: 0 })
+
   // Text-mode controls
   const [sizes, setSizes] = useState([{ text: 'S', count: 20 }]) // [{text, count}]
   const [bold, setBold] = useState(true)
@@ -92,6 +100,9 @@ export default function App() {
 
   const lastBytes = useRef(null)
   const fileInput = useRef(null)
+  // OCR results, keyed by file name+size — reading a page is slow, and the
+  // settings sliders re-run the build constantly.
+  const ocrCache = useRef(new Map())
   const perPage = sheet.cols * sheet.rows
   const single = docs.length === 1
   const fileName = single ? docs[0].name : docs.length > 1 ? `${docs.length} PDFs` : ''
@@ -101,6 +112,9 @@ export default function App() {
   )
     .map(([s, n]) => `${n} ${MP_NAMES[s]}`)
     .join(' · ')
+
+  // Pairing only makes sense for an all-Myntra batch holding both kinds of file.
+  const canPair = docs.length > 1 && docs.every((d) => d.source === 'myntra')
 
   // Apply + persist the theme.
   useEffect(() => {
@@ -121,6 +135,52 @@ export default function App() {
       setOutput('labels')
     }
   }, [source])
+
+  // Read every Myntra page (OCR) and pair each label with its own bill. Runs
+  // only while the toggle is on; results are cached per file, so moving the
+  // layout sliders afterwards never re-reads anything.
+  useEffect(() => {
+    if (!myntraPair || !canPair) {
+      setPairInfo(null)
+      setPairBusy(false)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      setPairBusy(true)
+      setPairProgress({ done: 0, total: docs.length })
+      try {
+        const read = []
+        for (const d of docs) {
+          const key = `${d.name}:${d.size}`
+          let info = ocrCache.current.get(key)
+          if (!info) {
+            info = await readMyntraDoc(d.buffer.slice(0))
+            ocrCache.current.set(key, info)
+          }
+          if (cancelled) return
+          read.push({ ...info, doc: d })
+          setPairProgress((p) => ({ ...p, done: p.done + 1 }))
+        }
+        const result = pairMyntraDocs(
+          read.filter((r) => r.role === 'label'),
+          read.filter((r) => r.role === 'bill'),
+        )
+        if (!cancelled) setPairInfo({ ...result, ocrFailed: read.some((r) => r.ocrFailed) })
+      } catch (e) {
+        console.error(e)
+        if (!cancelled) {
+          setPairInfo(null)
+          setError('Could not read the Myntra pages: ' + e.message)
+        }
+      } finally {
+        if (!cancelled) setPairBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [myntraPair, canPair, docs])
 
   const clearPreview = () => {
     setStats(null)
@@ -272,6 +332,9 @@ export default function App() {
       clearPreview()
       return
     }
+    // Pairing is still reading the pages — hold off, or the preview would show
+    // the invoices packed onto the sticker sheets as if they were labels.
+    if (myntraPair && canPair && !pairInfo) return
     setBusy(true)
     setError('')
     try {
@@ -280,7 +343,25 @@ export default function App() {
       let items
       let out2
       const allMyntra = single ? source === 'myntra' : docs.every((d) => d.source === 'myntra')
-      if (single) {
+      const pairing = myntraPair && canPair && pairInfo
+      if (pairing) {
+        // Labels in matched order, then the bills in that SAME order, so the
+        // nth sticker and the nth invoice belong to the same parcel. Anything
+        // that couldn't be paired still prints, at the end of its own section.
+        out2 = 'both'
+        const mk = (entry, role) => ({
+          arrayBuffer: entry.doc.buffer.slice(0),
+          source: 'myntra',
+          role,
+          flipkartCrop: MYNTRA_CROP,
+        })
+        items = [
+          ...pairInfo.pairs.map((p) => mk(p.label, 'label')),
+          ...pairInfo.unmatchedLabels.map((l) => mk(l, 'label')),
+          ...pairInfo.pairs.map((p) => mk(p.bill, 'bill')),
+          ...pairInfo.unmatchedBills.map((b) => mk(b, 'bill')),
+        ]
+      } else if (single) {
         out2 = source === 'myntra' ? 'labels' : output
         items = [{
           arrayBuffer: docs[0].buffer.slice(0),
@@ -326,7 +407,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -359,6 +440,9 @@ export default function App() {
     clearPreview()
     setDocs([])
     setError('')
+    setMyntraPair(false)
+    setPairInfo(null)
+    ocrCache.current.clear()
     setSource('amazon')
     setDetected(null)
     setLocked(false)
@@ -868,6 +952,107 @@ export default function App() {
                           Auto-detected per file — <b>{sourceSummary}</b>. All labels are
                           combined onto the sheets together.
                         </small>
+                      </div>
+                    )}
+
+                    {canPair && (
+                      <div className="ctrl">
+                        <label className="switch">
+                          <input
+                            type="checkbox"
+                            checked={myntraPair}
+                            onChange={(e) => setMyntraPair(e.target.checked)}
+                          />
+                          <span className="switch__track" />
+                          <span className="switch__text">Myntra — match bills to labels</span>
+                        </label>
+                        <small className="hint">
+                          Drop the shipping labels and the tax invoices in together. Each
+                          label is matched to its own bill by the buyer&rsquo;s address, then
+                          all labels print first and the bills follow on their own pages,
+                          in the same order.
+                        </small>
+
+                        {myntraPair && pairBusy && (
+                          <small className="hint">
+                            Reading the pages… {pairProgress.done}/{pairProgress.total}
+                          </small>
+                        )}
+
+                        {myntraPair && !pairBusy && pairInfo && (
+                          <div className="matchlist">
+                            {pairInfo.pairs.map((p, i) => (
+                              <div className="matchlist__row" key={`p${i}`}>
+                                <span className="matchlist__n">{i + 1}</span>
+                                <span className="matchlist__who">
+                                  <b>{p.label.name || 'Name not read'}</b>
+                                  <small>
+                                    {p.label.doc.name} → {p.bill.doc.name}
+                                    {p.label.pincode ? ` · ${p.label.pincode}` : ''}
+                                  </small>
+                                </span>
+                                <span
+                                  className={
+                                    'matchlist__flag' + (p.ambiguous ? ' matchlist__flag--warn' : '')
+                                  }
+                                  title={
+                                    p.ambiguous
+                                      ? 'Two bills look equally likely — check this one by hand'
+                                      : 'Matched on buyer name and address'
+                                  }
+                                >
+                                  {p.ambiguous ? 'check' : '✓'}
+                                </span>
+                              </div>
+                            ))}
+
+                            {pairInfo.unmatchedLabels.map((l, i) => (
+                              <div className="matchlist__row" key={`ul${i}`}>
+                                <span className="matchlist__n">–</span>
+                                <span className="matchlist__who">
+                                  <b>{l.name || 'Name not read'}</b>
+                                  <small>{l.doc.name} · no bill found</small>
+                                </span>
+                                <span className="matchlist__flag matchlist__flag--bad">label</span>
+                              </div>
+                            ))}
+
+                            {pairInfo.unmatchedBills.map((b, i) => (
+                              <div className="matchlist__row" key={`ub${i}`}>
+                                <span className="matchlist__n">–</span>
+                                <span className="matchlist__who">
+                                  <b>{b.name || 'Name not read'}</b>
+                                  <small>{b.doc.name} · no label found</small>
+                                </span>
+                                <span className="matchlist__flag matchlist__flag--bad">bill</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {myntraPair && !pairBusy && pairInfo && (
+                          <small
+                            className={
+                              'hint' +
+                              (pairInfo.unmatchedLabels.length ||
+                              pairInfo.unmatchedBills.length ||
+                              pairInfo.pairs.some((p) => p.ambiguous)
+                                ? ''
+                                : ' hint--ok')
+                            }
+                          >
+                            {pairInfo.ocrFailed
+                              ? 'Some pages couldn’t be read — check every pairing before printing.'
+                              : `${pairInfo.pairs.length} matched` +
+                                (pairInfo.unmatchedLabels.length
+                                  ? `, ${pairInfo.unmatchedLabels.length} label(s) without a bill`
+                                  : '') +
+                                (pairInfo.unmatchedBills.length
+                                  ? `, ${pairInfo.unmatchedBills.length} bill(s) without a label`
+                                  : '') +
+                                '.'}
+                          </small>
+                        )}
                       </div>
                     )}
 

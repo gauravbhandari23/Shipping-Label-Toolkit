@@ -85,7 +85,10 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
  * Labels from every file are packed together onto the sticker sheets; bills are
  * grouped by their source so each marketplace's invoices lay out correctly.
  *
- * @param {Array<{arrayBuffer, source, splitRatio?, flipkartCrop?, layout?}>} items
+ * @param {Array<{arrayBuffer, source, role?, splitRatio?, flipkartCrop?, layout?}>} items
+ *        `role` only applies to Myntra, whose label and invoice arrive as two
+ *        separate PDFs: 'bill' marks the file as an invoice, anything else (the
+ *        default) treats it as a shipping label.
  * @param {object} options  shared layout options (innerPad, showOutlines,
  *        includeBills, billsOnly, pairs, sheet, startSlot)
  * @returns {Promise<{bytes, labelCount, billCount, sheetCount}>}
@@ -110,6 +113,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
   const allBills = []
   const flipkartBills = [] // full-width invoices stack 2 per page
   const stickerBills = [] // Amazon half-page invoices pack onto sticker sheets
+  const myntraBills = [] // whole-page tax invoices, one per A4
 
   for (const item of items) {
     const src = await PDFDocument.load(item.arrayBuffer)
@@ -118,6 +122,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     const source = item.source || 'amazon'
     const { labelRegions, billRegions } = collectRegions(srcPages, {
       source,
+      role: item.role || 'label',
       splitRatio: item.splitRatio ?? 0.5,
       flipkartCrop: item.flipkartCrop || FLIPKART_CROP,
       layout: item.layout || null,
@@ -126,6 +131,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     allLabels.push(...labelRegions)
     allBills.push(...billRegions)
     if (source === 'flipkart') flipkartBills.push(...billRegions)
+    else if (source === 'myntra') myntraBills.push(...billRegions)
     else stickerBills.push(...billRegions)
   }
 
@@ -140,6 +146,9 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign)
     }
     if (wantBills) {
+      // Myntra invoices go first among the bills so they line up 1:1 with the
+      // label order the sheets were just packed in.
+      if (myntraBills.length) await placeFullPage(out, myntraBills)
       if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
       if (stickerBills.length) await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
     }
@@ -158,16 +167,22 @@ export async function buildCombinedLabelPdf(items, options = {}) {
  * Collect the label (and optional bill) crop regions for one source PDF,
  * per its marketplace layout. Regions reference the source pages directly.
  */
-function collectRegions(srcPages, { source, splitRatio, flipkartCrop, layout, wantBills }) {
+function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills }) {
   const labelRegions = []
   const billRegions = []
 
   if (source === 'myntra') {
-    // 1 shipping label per page, no invoice. Crop trims the page margins.
+    // Label and invoice arrive as separate PDFs, 1 page each. An invoice is
+    // taken whole (it's already a full A4 of content); a label gets the crop
+    // that trims its blank page margins.
     const c = flipkartCrop
     for (const page of srcPages) {
       const { width, height } = page.getSize()
-      labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
+      if (role === 'bill') {
+        if (wantBills) billRegions.push({ page, left: 0, right: width, top: height, bottom: 0 })
+      } else {
+        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
+      }
     }
   } else if (source === 'flipkart') {
     const c = flipkartCrop
@@ -323,6 +338,39 @@ async function placeStacked(out, regions, rows, startBand = 0) {
     const x = (pageW - drawW) / 2
     const y = bandBottom + (bandH - drawH) / 2
     page.drawPage(embedded, { x, y, width: drawW, height: drawH })
+  }
+}
+
+/**
+ * Give each region an A4 page of its own, fitted whole and centered. Used for
+ * Myntra tax invoices, which are already full pages — so the first one starts a
+ * fresh page after the label sheets, and each invoice stays readable at
+ * roughly its original size.
+ */
+async function placeFullPage(out, regions, margin = 6) {
+  const pageW = 210 * MM
+  const pageH = 297 * MM
+  const m = margin * MM
+
+  for (const r of regions) {
+    const page = out.addPage([pageW, pageH])
+    const embedded = await out.embedPage(r.page, {
+      left: r.left,
+      bottom: r.bottom,
+      right: r.right,
+      top: r.top,
+    })
+    const regW = r.right - r.left
+    const regH = r.top - r.bottom
+    const scale = Math.min((pageW - m * 2) / regW, (pageH - m * 2) / regH)
+    const drawW = regW * scale
+    const drawH = regH * scale
+    page.drawPage(embedded, {
+      x: (pageW - drawW) / 2,
+      y: (pageH - drawH) / 2,
+      width: drawW,
+      height: drawH,
+    })
   }
 }
 

@@ -197,13 +197,19 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
     // `layout[i]` is that box for page i; if it couldn't be measured we fall
     // back to the crop fractions.
     const c = flipkartCrop
+    // Printed at its true size, flush against the outer edge of its column.
+    // These labels are nearly as wide as the sticker, so blowing one up to fill
+    // it left the inner edge a millimetre off the centre cut — and a shipping
+    // label is meant to print at 100% anyway, so its barcodes keep the size
+    // they were drawn at. Everything left over goes to the centre side.
+    const fit = { maxScale: 1, hAlign: 'outer', flush: true }
     srcPages.forEach((page, i) => {
       const box = layout && layout[i]
       if (box && typeof box.left === 'number') {
-        labelRegions.push({ page, left: box.left, right: box.right, top: box.top, bottom: box.bottom })
+        labelRegions.push({ page, left: box.left, right: box.right, top: box.top, bottom: box.bottom, ...fit })
       } else {
         const { width, height } = page.getSize()
-        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
+        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom), ...fit })
       }
     })
   } else if (source === 'myntra') {
@@ -322,18 +328,24 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const regH = r.top - r.bottom
 
     // Fit the artwork inside the sticker (minus padding), keeping aspect ratio.
+    // A region may cap its own scale (maxScale: 1 = never enlarge, print at the
+    // size it was drawn) and pick its own alignment, whatever the batch default.
     const availW = labelW - pad * 2
     const availH = labelH - pad * 2 - TOP_GAP * MM
-    const scale = Math.min(availW / regW, availH / regH)
+    const scale = Math.min(availW / regW, availH / regH, r.maxScale ?? Infinity)
     const drawW = regW * scale
     const drawH = regH * scale
     // Horizontal placement. 'center' centers in the sticker; 'outer' pushes the
     // label toward the OUTER edge of its column (left column → left, right
     // column → right) so narrow labels don't crowd the centre cut line.
     const leftHalf = col < sheet.cols / 2
+    const align = r.hAlign || hAlign
+    // A flush region gives up its padding on the OUTER side only, so every
+    // spare millimetre goes to the centre cut instead of being split in two.
+    const outerPad = r.flush ? 0 : pad
     let x
-    if (hAlign === 'outer') {
-      x = leftHalf ? cellLeft + pad : cellLeft + labelW - drawW - pad
+    if (align === 'outer') {
+      x = leftHalf ? cellLeft + outerPad : cellLeft + labelW - drawW - outerPad
     } else {
       x = cellLeft + (labelW - drawW) / 2
     }

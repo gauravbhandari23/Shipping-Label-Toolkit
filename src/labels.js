@@ -57,6 +57,14 @@ export const OWN_CROP = {
   bottom: 1.0,
 }
 
+// How far (mm) your own labels sit from the OUTER edge of the paper — left
+// column from the left edge, right column from the right. Measured from the
+// paper rather than the sticker grid, which is what closes the outer gap up:
+// the grid's own margin is 5.85mm, and pulling the label out to here both
+// shrinks that gap and hands the difference to the centre cut. 3mm is about as
+// close to the edge as a printer will go before it starts clipping.
+export const OWN_EDGE_MARGIN = 3
+
 /**
  * Build a labels PDF from an Amazon or Flipkart "label + invoice" PDF, laid out
  * to match a pre-cut sticker sheet (default: A4 ST4 / Avery L7169, 4 per sheet).
@@ -197,12 +205,14 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
     // `layout[i]` is that box for page i; if it couldn't be measured we fall
     // back to the crop fractions.
     const c = flipkartCrop
-    // Printed at its true size, flush against the outer edge of its column.
-    // These labels are nearly as wide as the sticker, so blowing one up to fill
-    // it left the inner edge a millimetre off the centre cut — and a shipping
-    // label is meant to print at 100% anyway, so its barcodes keep the size
-    // they were drawn at. Everything left over goes to the centre side.
-    const fit = { maxScale: 1, hAlign: 'outer', flush: true }
+    // Printed at its true size, pinned near the outer edge of the paper. These
+    // labels are nearly as wide as a sticker, so scaling one up to fill it left
+    // the inner edge a millimetre off the centre cut — and a shipping label is
+    // meant to print at 100% anyway, so its barcodes keep the size they were
+    // drawn at. Placing it against the paper edge instead of the sticker grid
+    // closes up the outer gap, and every millimetre saved there becomes
+    // clearance at the centre cut.
+    const fit = { maxScale: 1, hAlign: 'outer', edgeMargin: OWN_EDGE_MARGIN }
     srcPages.forEach((page, i) => {
       const box = layout && layout[i]
       if (box && typeof box.left === 'number') {
@@ -340,12 +350,14 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     // column → right) so narrow labels don't crowd the centre cut line.
     const leftHalf = col < sheet.cols / 2
     const align = r.hAlign || hAlign
-    // A flush region gives up its padding on the OUTER side only, so every
-    // spare millimetre goes to the centre cut instead of being split in two.
-    const outerPad = r.flush ? 0 : pad
     let x
-    if (align === 'outer') {
-      x = leftHalf ? cellLeft + outerPad : cellLeft + labelW - drawW - outerPad
+    if (align === 'outer' && r.edgeMargin != null) {
+      // Measured off the paper's outer edge, not the sticker grid — the grid's
+      // margin is the gap being closed, so it can't be the thing we measure from.
+      const edge = r.edgeMargin * MM
+      x = leftHalf ? edge : pageW - edge - drawW
+    } else if (align === 'outer') {
+      x = leftHalf ? cellLeft + pad : cellLeft + labelW - drawW - pad
     } else {
       x = cellLeft + (labelW - drawW) / 2
     }

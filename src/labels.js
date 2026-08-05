@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib'
 import { encodeBarcode, QUIET_MODULES } from './barcode'
 
 // 72 PDF points = 1 inch = 25.4 mm.
@@ -606,6 +606,104 @@ export async function buildBarcodeLabelPdf(options = {}) {
 
     if (capH) {
       drawCenteredText(page, font, items[k], capSize, 'center', cellLeft + pad, blockBottom, availW, capH)
+    }
+  }
+
+  const bytes = await out.save()
+  return { bytes, labelCount: n, sheetCount: out.getPageCount() }
+}
+
+/**
+ * Build a sheet of LOGO stickers: one image repeated onto the same sticker grid
+ * the other modes use. Pair it with `gridSheet`-style templates to tile many
+ * small logos inside each pre-cut part.
+ *
+ * @param {object} options
+ * @param {Uint8Array} options.imageBytes  the logo, as PNG or JPEG bytes
+ * @param {'png'|'jpg'} options.imageType  which of the two it is
+ * @param {number}  options.count          how many stickers to print
+ * @param {number}  options.sizePct        how much of each sticker the logo fills (10-100)
+ * @param {boolean} options.rotate         turn the logo 90° (a wide logo down a tall sticker)
+ * @param {object}  options.sheet          sticker template in mm (see DEFAULT_SHEET)
+ * @param {number}  options.startSlot      first sticker position to fill
+ * @param {boolean} options.showOutlines   draw a thin border at each position
+ * @param {number}  options.innerPad       mm of clear space inside each sticker
+ * @returns {Promise<{bytes: Uint8Array, labelCount, sheetCount}>}
+ */
+export async function buildLogoLabelPdf(options = {}) {
+  const {
+    imageBytes = null,
+    imageType = 'png',
+    count = 1,
+    sizePct = 100,
+    rotate = false,
+    sheet = DEFAULT_SHEET,
+    startSlot = 0,
+    showOutlines = false,
+    innerPad = 3,
+  } = options
+
+  const out = await PDFDocument.create()
+  const n = Math.max(0, Math.floor(count))
+  if (!imageBytes || !n) return { bytes: await out.save(), labelCount: 0, sheetCount: 0 }
+
+  let img
+  try {
+    img = imageType === 'jpg' ? await out.embedJpg(imageBytes) : await out.embedPng(imageBytes)
+  } catch {
+    throw new Error('That image couldn’t be read. Try a PNG or JPG export of your logo.')
+  }
+
+  const perPage = sheet.cols * sheet.rows
+  const pageW = sheet.pageW * MM
+  const pageH = sheet.pageH * MM
+  const labelW = sheet.labelW * MM
+  const labelH = sheet.labelH * MM
+  const mTop = sheet.marginTop * MM
+  const mLeft = sheet.marginLeft * MM
+  const gapX = sheet.gapX * MM
+  const gapY = sheet.gapY * MM
+  const pad = innerPad * MM
+  const offset = ((startSlot % perPage) + perPage) % perPage
+  const pct = Math.min(100, Math.max(5, sizePct)) / 100
+
+  const availW = Math.max(0, labelW - pad * 2)
+  const availH = Math.max(0, labelH - pad * 2)
+  // Upright, the logo fills the sticker the usual way. Turned, it's the SWAPPED
+  // box that has to fit — a 5:1 wide logo becomes 1:5 tall — so the fit is run
+  // against the flipped dimensions and the drawn size read back the other way.
+  const scale = rotate
+    ? Math.min(availH / img.width, availW / img.height) * pct
+    : Math.min(availW / img.width, availH / img.height) * pct
+  const drawW = img.width * scale
+  const drawH = img.height * scale
+  // What the logo takes up on the page once it's been turned.
+  const visW = rotate ? drawH : drawW
+  const visH = rotate ? drawW : drawH
+
+  let page = null
+  for (let k = 0; k < n; k++) {
+    const slot = (offset + k) % perPage
+    if (k === 0 || slot === 0) page = out.addPage([pageW, pageH])
+
+    const col = slot % sheet.cols
+    const row = Math.floor(slot / sheet.cols)
+    const cellLeft = mLeft + col * (labelW + gapX)
+    const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
+
+    if (showOutlines) {
+      page.drawRectangle({ x: cellLeft, y: cellBottom, width: labelW, height: labelH, borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 0.5 })
+    }
+
+    // Centre the logo in the sticker, on both axes.
+    const x = cellLeft + pad + (availW - visW) / 2
+    const y = cellBottom + pad + (availH - visH) / 2
+    if (rotate) {
+      // drawImage turns the image about its bottom-left corner, so that corner
+      // has to start a full visual width to the right of where it ends up.
+      page.drawImage(img, { x: x + visW, y, width: drawW, height: drawH, rotate: degrees(90) })
+    } else {
+      page.drawImage(img, { x, y, width: drawW, height: drawH })
     }
   }
 

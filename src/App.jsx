@@ -4,6 +4,7 @@ import {
   buildCombinedLabelPdf,
   buildTextLabelPdf,
   buildBarcodeLabelPdf,
+  buildLogoLabelPdf,
   DEFAULT_SHEET,
   FLIPKART_CROP,
   MYNTRA_CROP,
@@ -50,6 +51,64 @@ const NO_BILL_SOURCES = new Set(['myntra', 'own'])
 const cropFor = (source) =>
   source === 'myntra' ? MYNTRA_CROP : source === 'own' ? OWN_CROP : FLIPKART_CROP
 
+/**
+ * Read an image file into the PNG/JPEG bytes pdf-lib can embed, plus its pixel
+ * size. PNG and JPEG go through untouched; anything else the browser can draw
+ * (WEBP, SVG, GIF) is painted onto a canvas once and taken out as a PNG. SVGs
+ * rasterise at whatever size they declare, which is often tiny, so those get
+ * scaled up first — a logo printed at 90mm needs the pixels.
+ */
+async function readImageFile(file) {
+  const name = file.name || 'logo'
+  const buf = await file.arrayBuffer()
+  const dims = await imageSize(file)
+  if (file.type === 'image/png') return { bytes: new Uint8Array(buf), type: 'png', name, ...dims }
+  if (file.type === 'image/jpeg') return { bytes: new Uint8Array(buf), type: 'jpg', name, ...dims }
+
+  const url = URL.createObjectURL(file)
+  try {
+    const img = await loadImage(url)
+    const w = img.naturalWidth || 512
+    const h = img.naturalHeight || 512
+    const scale = Math.min(4, Math.max(1, 1400 / w))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(w * scale)
+    canvas.height = Math.round(h * scale)
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'))
+    if (!blob) throw new Error('canvas is empty')
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), type: 'png', name, w: canvas.width, h: canvas.height }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not read that image.'))
+    img.src = src
+  })
+}
+
+/** Pixel size of an image blob. */
+async function imageSize(blob) {
+  const url = URL.createObjectURL(blob)
+  try {
+    const img = await loadImage(url)
+    return { w: img.naturalWidth || 1, h: img.naturalHeight || 1 }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+/** Size of an `aspect`-shaped box fitted inside w x h, keeping proportions. */
+function fitBox(w, h, aspect) {
+  if (!(aspect > 0) || w <= 0 || h <= 0) return { w: 0, h: 0 }
+  return w / h <= aspect ? { w, h: w / aspect } : { w: h * aspect, h }
+}
+
 // Quick presets for how many small labels to tile INSIDE each pre-cut part.
 const GRID_PRESETS = [
   [2, 2],
@@ -59,7 +118,7 @@ const GRID_PRESETS = [
 ]
 
 export default function App() {
-  const [mode, setMode] = useState('pdf') // 'pdf' | 'text' | 'barcode'
+  const [mode, setMode] = useState('pdf') // 'pdf' | 'text' | 'barcode' | 'logo'
   // Uploaded PDFs: [{ name, buffer, source, detected, layout }]. One or many.
   const [docs, setDocs] = useState([])
   const [pdfUrl, setPdfUrl] = useState('')
@@ -106,6 +165,15 @@ export default function App() {
   const [textPad, setTextPad] = useState(1.5)
   const [gridMargin, setGridMargin] = useState(5) // mm — page margin for the dense grid
 
+  // Logo-mode controls (layout/padding settings are shared with text mode).
+  // logoImg = {bytes, type, name, w, h} — starts as the Rangrooh logo, so the
+  // tab prints something without uploading anything.
+  const [logoImg, setLogoImg] = useState(null)
+  const [logoDir, setLogoDir] = useState('h') // 'h' upright | 'v' turned 90°
+  const [logoSizePct, setLogoSizePct] = useState(90)
+  const [logoCount, setLogoCount] = useState(12)
+  const [logoUrl, setLogoUrl] = useState('') // preview thumbnail of the current logo
+
   // Barcode-mode controls (layout/padding settings are shared with text mode)
   const [codes, setCodes] = useState([{ text: DEFAULT_CODE, count: 1 }]) // [{text, count}]
   const [symbology, setSymbology] = useState('code128') // 'code128' | 'code39'
@@ -114,6 +182,7 @@ export default function App() {
 
   const lastBytes = useRef(null)
   const fileInput = useRef(null)
+  const logoInput = useRef(null)
   // OCR results, keyed by file name+size — reading a page is slow, and the
   // settings sliders re-run the build constantly.
   const ocrCache = useRef(new Map())
@@ -138,6 +207,42 @@ export default function App() {
       /* ignore */
     }
   }, [theme])
+
+  // Load the built-in Rangrooh logo once, so the Logo tab has something to print
+  // the moment it's opened. An upload replaces it.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(logo)
+        const blob = await res.blob()
+        const { w, h } = await imageSize(blob)
+        if (cancelled) return
+        setLogoImg({
+          bytes: new Uint8Array(await blob.arrayBuffer()),
+          type: 'png',
+          name: 'Rangrooh logo',
+          w,
+          h,
+        })
+      } catch (e) {
+        console.warn('[Rangrooh] could not load the built-in logo:', e)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Thumbnail of whichever logo is loaded, for the upload box.
+  useEffect(() => {
+    if (!logoImg) return undefined
+    const url = URL.createObjectURL(
+      new Blob([logoImg.bytes], { type: logoImg.type === 'jpg' ? 'image/jpeg' : 'image/png' }),
+    )
+    setLogoUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [logoImg])
 
   // Use the right default crop for the selected marketplace. Myntra and your own
   // labels have no separate bill, so force the export back to labels-only.
@@ -346,6 +451,47 @@ export default function App() {
       return
     }
 
+    // --- Logo mode ---
+    if (mode === 'logo') {
+      const n = Math.max(0, Math.floor(Number(logoCount) || 0))
+      if (!logoImg || !n) {
+        clearPreview()
+        return
+      }
+      setBusy(true)
+      setError('')
+      try {
+        const isGrid = textLayout === 'grid'
+        const logoSheet = isGrid ? gridSheet(2 * gridCols, 2 * gridRows, gridMargin) : sheet
+        const { bytes, labelCount, sheetCount } = await buildLogoLabelPdf({
+          imageBytes: logoImg.bytes,
+          imageType: logoImg.type,
+          count: n,
+          sizePct: logoSizePct,
+          rotate: logoDir === 'v',
+          sheet: logoSheet,
+          startSlot: isGrid ? 0 : Math.min(startSlot, perPage - 1),
+          showOutlines,
+          innerPad: Number(textPad),
+        })
+        lastBytes.current = bytes
+        setStats({ labelCount, billCount: 0, sheetCount })
+        const blob = new Blob([bytes], { type: 'application/pdf' })
+        const url = URL.createObjectURL(blob)
+        setPdfUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return url
+        })
+      } catch (e) {
+        console.error(e)
+        setError(e.message || 'Could not make the logo stickers.')
+        setStats(null)
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     // --- PDF mode ---
     if (!docs.length) {
       clearPreview()
@@ -431,7 +577,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -494,7 +640,9 @@ export default function App() {
         ? slug(sizes.find((s) => s.text.trim())?.text, 'text-labels')
         : mode === 'barcode'
           ? slug(codes.find((c) => c.text.trim())?.text, 'barcodes')
-          : (single ? fileName.replace(/\.pdf$/i, '') : 'labels') || 'labels'
+          : mode === 'logo'
+            ? slug(logoImg?.name?.replace(/\.[a-z0-9]+$/i, ''), 'logo')
+            : (single ? fileName.replace(/\.pdf$/i, '') : 'labels') || 'labels'
     a.href = url
     a.download = base + '_labels.pdf'
     document.body.appendChild(a)
@@ -535,6 +683,35 @@ export default function App() {
   // Stickers per page for the text mode depends on the chosen layout.
   const textPerPage = textLayout === 'grid' ? perPage * gridCols * gridRows : perPage
   const sheetsFor = (k) => Math.max(1, Math.ceil(k / textPerPage))
+
+  // Logo mode: work out how big one logo actually comes out, in mm, so the size
+  // slider can show a real measurement rather than a bare percentage.
+  const logoCell = textLayout === 'grid' ? gridSheet(2 * gridCols, 2 * gridRows, gridMargin) : sheet
+  const logoAspect = logoImg ? (logoDir === 'v' ? logoImg.h / logoImg.w : logoImg.w / logoImg.h) : 0
+  const logoFitted = fitBox(
+    Math.max(0, logoCell.labelW - textPad * 2),
+    Math.max(0, logoCell.labelH - textPad * 2),
+    logoAspect,
+  )
+  const logoPrintW = logoFitted.w * (logoSizePct / 100)
+  const logoPrintH = logoFitted.h * (logoSizePct / 100)
+
+  const handleLogoFile = async (fileList) => {
+    const file = Array.from(fileList || [])[0]
+    if (!file) return
+    if (!/^image\//.test(file.type)) {
+      setError('Please choose an image file — PNG, JPG, WEBP or SVG.')
+      return
+    }
+    setError('')
+    try {
+      setLogoImg(await readImageFile(file))
+    } catch (e) {
+      console.error(e)
+      setError(e.message || 'Could not read that image.')
+    }
+    if (logoInput.current) logoInput.current.value = ''
+  }
 
   // Size-list helpers (each row = one size/text + its own count).
   const totalQty = sizes.reduce((a, s) => a + Math.max(0, Math.floor(Number(s.count) || 0)), 0)
@@ -792,11 +969,12 @@ export default function App() {
         <div className="col col--left">
           {/* Mode toggle */}
           <div className="card mode-card">
-            <div className="seg seg--three">
+            <div className="seg seg--grid">
               {[
                 ['pdf', 'From a PDF'],
                 ['text', 'Text labels'],
                 ['barcode', 'Barcodes'],
+                ['logo', 'Logo'],
               ].map(([val, label]) => (
                 <button
                   key={val}
@@ -1466,6 +1644,156 @@ export default function App() {
             </div>
           )}
 
+          {/* ---------------- LOGO MODE ---------------- */}
+          {mode === 'logo' && (
+            <div className="card">
+              <div className="card__head">
+                <span className="step">1</span>
+                <h2>Your logo</h2>
+              </div>
+
+              <div className="controls">
+                <div className="ctrl">
+                  <span className="ctrl__label">Logo image</span>
+                  <div
+                    className={'drop drop--has' + (dragging ? ' drop--active' : '')}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setDragging(true)
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      setDragging(false)
+                      handleLogoFile(e.dataTransfer.files)
+                    }}
+                    onClick={() => logoInput.current?.click()}
+                  >
+                    <input
+                      ref={logoInput}
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={(e) => handleLogoFile(e.target.files)}
+                    />
+                    {logoUrl ? <img className="logothumb" src={logoUrl} alt="" /> : null}
+                    <div className="drop__title">{logoImg ? logoImg.name : 'Loading your logo…'}</div>
+                    <div className="drop__hint">
+                      {logoImg
+                        ? `${logoImg.w} × ${logoImg.h} px — click to use a different image`
+                        : 'PNG, JPG, WEBP or SVG'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="ctrl">
+                  <span className="ctrl__label">Direction</span>
+                  <div className="seg">
+                    {[
+                      ['h', 'Horizontal'],
+                      ['v', 'Vertical'],
+                    ].map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={'seg__btn' + (logoDir === val ? ' seg__btn--on' : '')}
+                        onClick={() => setLogoDir(val)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <small className="hint">
+                    Vertical turns the logo 90°, which suits a wide logo on a tall sticker.
+                  </small>
+                </div>
+
+                <label className="ctrl">
+                  <span className="ctrl__label">
+                    Size <b className="val">{logoSizePct}% · {logoPrintW.toFixed(0)} × {logoPrintH.toFixed(0)} mm</b>
+                  </span>
+                  <input
+                    type="range"
+                    min="10"
+                    max="100"
+                    step="5"
+                    value={logoSizePct}
+                    onChange={(e) => setLogoSizePct(Number(e.target.value))}
+                  />
+                  <small className="hint">
+                    Share of each sticker the logo fills, and what that comes to on paper.
+                  </small>
+                </label>
+
+                {stickerLayoutControls}
+
+                <div className="ctrl">
+                  <span className="ctrl__label">How many stickers</span>
+                  <div className="field-grid">
+                    <label className="field">
+                      <span>Stickers</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="2000"
+                        value={logoCount}
+                        onChange={(e) => setLogoCount(Math.max(1, Math.min(2000, Math.round(Number(e.target.value) || 1))))}
+                      />
+                    </label>
+                  </div>
+                  <div className="presets">
+                    {[1, 2, 5].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={'preset' + (logoCount === s * textPerPage ? ' preset--on' : '')}
+                        onClick={() => setLogoCount(s * textPerPage)}
+                      >
+                        {s * textPerPage} <span>({s} sheet{s > 1 ? 's' : ''})</span>
+                      </button>
+                    ))}
+                  </div>
+                  <small className="hint">
+                    <b>{logoCount}</b> stickers → <b>{sheetsFor(logoCount)}</b> sheet
+                    {sheetsFor(logoCount) > 1 ? 's' : ''} ({textPerPage} per A4).
+                  </small>
+                </div>
+
+                <label className="ctrl">
+                  <span className="ctrl__label">
+                    Padding inside each sticker <b className="val">{textPad} mm</b>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="6"
+                    step="0.5"
+                    value={textPad}
+                    onChange={(e) => setTextPad(Number(e.target.value))}
+                  />
+                </label>
+
+                {textLayout === 'st4' && startPositionPicker}
+
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={showOutlines}
+                    onChange={(e) => setShowOutlines(e.target.checked)}
+                  />
+                  <span className="switch__track" />
+                  <span className="switch__text">
+                    {textLayout === 'grid' ? 'Show cut lines' : 'Show outlines (for a test print)'}
+                  </span>
+                </label>
+
+                {textLayout === 'st4' && fineTuneControls}
+
+                {error && <div className="error">{error}</div>}
+              </div>
+            </div>
+          )}
+
           {/* Download (shared) */}
           {showDownload && (
             <div className="card card--cta">
@@ -1532,7 +1860,9 @@ export default function App() {
                       ? 'Type your text and it will preview here.'
                       : mode === 'barcode'
                         ? 'Type a value and its barcode will preview here.'
-                        : 'Your finished labels will preview here.'}
+                        : mode === 'logo'
+                          ? 'Your logo stickers will preview here.'
+                          : 'Your finished labels will preview here.'}
                   </p>
                 </div>
               )}

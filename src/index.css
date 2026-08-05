@@ -323,6 +323,15 @@ body {
   margin-top: 5px;
 }
 
+/* Thumbnail of the loaded logo, inside its drop zone. */
+.logothumb {
+  display: block;
+  max-width: 65%;
+  max-height: 52px;
+  object-fit: contain;
+  margin: 0 auto 10px;
+}
+
 /* ---------- Error ---------- */
 .error {
   margin-top: 14px;

@@ -1,11 +1,12 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { isOwnLabelText } from './own'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
 /**
  * Read the text of the first page and guess the marketplace.
- * Returns 'amazon', 'flipkart', or null if it can't tell.
+ * Returns 'amazon', 'flipkart', 'myntra', 'own', or null if it can't tell.
  *
  * Note: pdf.js detaches the buffer it's given, so pass a COPY (buffer.slice(0))
  * if you still need the original for generating output.
@@ -34,6 +35,10 @@ export async function detectMarketplace(arrayBuffer) {
     if (isFlipkart && !isAmazon) return 'flipkart'
     if (isAmazon && !isFlipkart) return 'amazon'
     if (isFlipkart && isAmazon) return /flipkart|shopsy/.test(text) ? 'flipkart' : 'amazon'
+
+    // Your own labels, printed by your store rather than a marketplace. Checked
+    // only once no marketplace claimed the file, so nothing above changes.
+    if (isOwnLabelText(text)) return 'own'
 
     // Myntra labels are a single full-page IMAGE with no extractable text, so a
     // near-empty page (no Amazon/Flipkart markers) is almost certainly Myntra.

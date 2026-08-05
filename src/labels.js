@@ -46,6 +46,17 @@ export const MYNTRA_CROP = {
   bottom: 1.0,
 }
 
+// Your own labels: 1 per page, invoice details printed on the label itself.
+// These are normally trimmed to their measured artwork box (see own.js), so
+// this whole-page crop is only the fallback for when that measurement fails —
+// and the manual starting point if you'd rather trim by hand.
+export const OWN_CROP = {
+  left: 0.0,
+  right: 1.0,
+  top: 0.0,
+  bottom: 1.0,
+}
+
 /**
  * Build a labels PDF from an Amazon or Flipkart "label + invoice" PDF, laid out
  * to match a pre-cut sticker sheet (default: A4 ST4 / Avery L7169, 4 per sheet).
@@ -54,12 +65,15 @@ export const MYNTRA_CROP = {
  *   amazon   — 2 orders per page in a 2x2 grid: labels = LEFT column, invoices = RIGHT column.
  *   flipkart — 1 order per page: label on TOP, invoice on BOTTOM (split by a horizontal line).
  *   myntra   — 1 label per page, NO invoice; the whole page is the label (crop trims margins).
+ *   own      — your own label: 1 per page, NO separate invoice (it's on the label);
+ *              cropped to the artwork box measured by own.js, since the page is
+ *              usually 4x6in with the label filling only its top part.
  *
  * @param {ArrayBuffer} arrayBuffer  raw bytes of the uploaded PDF
  * @param {object} options
- * @param {'amazon'|'flipkart'|'myntra'} options.source  which marketplace layout (default 'amazon')
+ * @param {'amazon'|'flipkart'|'myntra'|'own'} options.source  which layout (default 'amazon')
  * @param {number}  options.splitRatio    [amazon] fraction of page width that is the label (default 0.5)
- * @param {object}  options.flipkartCrop  [flipkart/myntra] crop box as top-left fractions
+ * @param {object}  options.flipkartCrop  [flipkart/myntra/own] crop box as top-left fractions
  * @param {number}  options.innerPad      mm of breathing room inside each sticker (default 2)
  * @param {boolean} options.showOutlines  draw a thin border at each label position (for test prints)
  * @param {boolean} options.includeBills  if true, also output the bills after the labels
@@ -68,10 +82,10 @@ export const MYNTRA_CROP = {
  * @param {number}  options.startSlot     first sticker position to fill on the first sheet,
  *                                        counting left-to-right, top-to-bottom (0 = top-left).
  *                                        Lets you skip stickers you've already peeled off.
- * @param {Array}   options.layout        [amazon] auto-detected content boxes per page
- *                                        ([{labels:[Box], bills:[Box]}], Box in PDF points).
- *                                        When given, used instead of fixed crop fractions so
- *                                        nothing is clipped on any Amazon template.
+ * @param {Array}   options.layout        auto-detected content boxes per page, used instead of
+ *                                        fixed crop fractions so nothing is clipped. Shape depends
+ *                                        on the source: [amazon] [{labels:[Box], bills:[Box]}],
+ *                                        [own] [Box] — one artwork box per page. Box is in PDF points.
  * @returns {Promise<{bytes: Uint8Array, labelCount, billCount, sheetCount}>}
  */
 export async function buildLabelPdf(arrayBuffer, options = {}) {
@@ -174,7 +188,24 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
   const labelRegions = []
   const billRegions = []
 
-  if (source === 'myntra') {
+  if (source === 'own') {
+    // Your own label: 1 per page, no separate invoice (the bill is printed on
+    // the label). The page is usually 4x6in with the artwork filling only its
+    // top part, so we crop to the measured artwork box — otherwise the empty
+    // paper below would be scaled onto the sticker too and shrink the label.
+    // `layout[i]` is that box for page i; if it couldn't be measured we fall
+    // back to the crop fractions.
+    const c = flipkartCrop
+    srcPages.forEach((page, i) => {
+      const box = layout && layout[i]
+      if (box && typeof box.left === 'number') {
+        labelRegions.push({ page, left: box.left, right: box.right, top: box.top, bottom: box.bottom })
+      } else {
+        const { width, height } = page.getSize()
+        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
+      }
+    })
+  } else if (source === 'myntra') {
     // Label and invoice arrive as separate PDFs, 1 page each. An invoice is
     // taken whole (it's already a full A4 of content); a label gets the crop
     // that trims its blank page margins.

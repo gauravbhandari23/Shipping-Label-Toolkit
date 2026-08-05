@@ -104,7 +104,7 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
  *        separate PDFs: 'bill' marks the file as an invoice, anything else (the
  *        default) treats it as a shipping label.
  * @param {object} options  shared layout options (innerPad, showOutlines,
- *        includeBills, billsOnly, pairs, sheet, startSlot)
+ *        includeBills, billsOnly, pairs, sheet, startSlot, hAlign, outwardX)
  * @returns {Promise<{bytes, labelCount, billCount, sheetCount}>}
  */
 export async function buildCombinedLabelPdf(items, options = {}) {
@@ -117,6 +117,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     sheet = DEFAULT_SHEET,
     startSlot = 0,
     hAlign = 'center', // 'center' | 'outer' (push labels to the outer column edge)
+    outwardX = 0, // mm to shift each label AWAY from the sheet's centre line
   } = options
 
   const wantLabels = pairs || !billsOnly
@@ -157,7 +158,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     await placePairs(out, allLabels, allBills, 2)
   } else {
     if (wantLabels) {
-      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign)
+      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign, outwardX)
     }
     if (wantBills) {
       // Myntra invoices go first among the bills so they line up 1:1 with the
@@ -258,8 +259,15 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
  * is fitted inside its sticker rectangle (minus innerPad), preserving aspect
  * ratio and centered. Always starts a fresh page, so labels and bills stay on
  * separate sheets.
+ *
+ * `outwardX` (mm) shifts each label away from the sheet's centre line — left
+ * column further left, right column further right. A label that nearly fills
+ * its sticker sits only a millimetre from the centre cut, so a slightly
+ * off-register printer can drop it across the line; this buys back clearance
+ * on BOTH columns at once. Shifting every label the same way instead would
+ * only help one of them and push the other into the cut.
  */
-async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0, hAlign = 'center') {
+async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0, hAlign = 'center', outwardX = 0) {
   const perPage = sheet.cols * sheet.rows
   const pageW = sheet.pageW * MM
   const pageH = sheet.pageH * MM
@@ -322,12 +330,18 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     // Horizontal placement. 'center' centers in the sticker; 'outer' pushes the
     // label toward the OUTER edge of its column (left column → left, right
     // column → right) so narrow labels don't crowd the centre cut line.
+    const leftHalf = col < sheet.cols / 2
     let x
     if (hAlign === 'outer') {
-      const leftHalf = col < sheet.cols / 2
       x = leftHalf ? cellLeft + pad : cellLeft + labelW - drawW - pad
     } else {
       x = cellLeft + (labelW - drawW) / 2
+    }
+    if (outwardX) {
+      // Away from the centre line, then kept on the paper — a nudge big enough
+      // to run a label off the sheet would just clip it.
+      x += (leftHalf ? -1 : 1) * outwardX * MM
+      x = Math.max(0, Math.min(pageW - drawW, x))
     }
     // Top-align inside the sticker so labels in the same row line up exactly.
     const y = cellBottom + labelH - drawH - pad - TOP_GAP * MM

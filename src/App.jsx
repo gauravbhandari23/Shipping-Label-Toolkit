@@ -83,6 +83,7 @@ export default function App() {
   const [splitPct, setSplitPct] = useState(50)
   const [crop, setCrop] = useState(FLIPKART_CROP) // fractions
   const [innerPad, setInnerPad] = useState(1)
+  const [nudgeOut, setNudgeOut] = useState(0) // mm each label moves off the centre line
   const [showOutlines, setShowOutlines] = useState(false)
   const [output, setOutput] = useState('labels') // 'labels' | 'pairs' | 'both' | 'bills'
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
@@ -413,6 +414,7 @@ export default function App() {
         // Myntra labels are narrow — push them to the outer column edge so they
         // don't crowd the centre cut line.
         hAlign: allMyntra ? 'outer' : 'center',
+        outwardX: Number(nudgeOut),
       })
       lastBytes.current = bytes
       setStats({ labelCount, billCount, sheetCount })
@@ -429,7 +431,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -441,6 +443,7 @@ export default function App() {
     setSplitPct(50)
     setCrop(cropFor(source))
     setInnerPad(1)
+    setNudgeOut(0)
     setShowOutlines(false)
     setOutput('labels')
     setSheet(DEFAULT_SHEET)
@@ -1112,6 +1115,32 @@ export default function App() {
                         onChange={(e) => setInnerPad(Number(e.target.value))}
                       />
                     </label>
+
+                    {output !== 'pairs' && (
+                      <label className="ctrl">
+                        <span className="ctrl__label">
+                          Move off the centre cut <b className="val">{nudgeOut} mm</b>
+                        </span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="10"
+                          step="0.5"
+                          value={nudgeOut}
+                          onChange={(e) => setNudgeOut(Number(e.target.value))}
+                        />
+                        <small className="hint">
+                          Pushes each label away from the middle of the sheet — the left
+                          column moves left, the right column moves right. Turn it up if a
+                          label creeps over the centre cut line. A label that already fills
+                          its sticker only has a millimetre or two of room before it starts
+                          printing past the sticker edge, so raise the padding above as well
+                          if you need more — that shrinks the label and makes real space.
+                          To shift the whole sheet instead (a printer that prints
+                          off-register), use the left margin under fine-tune.
+                        </small>
+                      </label>
+                    )}
 
                     {output !== 'pairs' && startPositionPicker}
 

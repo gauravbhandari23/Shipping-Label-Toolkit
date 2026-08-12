@@ -243,18 +243,53 @@ const MATCH_FLOOR = 50
 const AMBIGUOUS_GAP = 8
 
 /**
+ * Put the labels in the order they were downloaded, oldest first.
+ *
+ * `lastModified` is the file's save time, which for a downloaded file is the
+ * moment the download finished writing. It survives a normal download and a
+ * normal copy, but a zip/unzip, a cloud sync or a "save as" rewrites every file
+ * to the same instant — so when the batch carries no usable spread of times,
+ * fall back to the order the files were dropped in.
+ *
+ * @returns {{ordered: Array, orderedBy: 'time'|'upload'}}
+ */
+function orderByDownload(labels) {
+  const times = labels.map((l) => Number(l.doc?.lastModified))
+  const usable =
+    times.every((t) => Number.isFinite(t) && t > 0) &&
+    // All-identical means the timestamps were rewritten in bulk and carry no
+    // ordering. A single label needs no ordering either way.
+    (labels.length < 2 || new Set(times).size > 1)
+  if (!usable) return { ordered: labels, orderedBy: 'upload' }
+
+  // Stable, so two downloads that landed in the same millisecond keep the
+  // order they were dropped in.
+  const ordered = labels
+    .map((label, i) => ({ label, t: times[i] }))
+    .sort((a, b) => a.t - b.t)
+    .map((e) => e.label)
+  return { ordered, orderedBy: 'time' }
+}
+
+/**
  * Pair labels with bills on buyer name + address. Greedy best-first: the
  * strongest pair in the whole batch is taken, then the next strongest among
  * what's left, and so on.
  *
+ * Download time decides the print ORDER, the address decides the PAIRING — two
+ * separate jobs. A bill's own download time is never consulted; it simply
+ * follows whichever label it matched.
+ *
  * @param {Array} labels  entries from readMyntraDoc, role 'label'
  * @param {Array} bills   entries from readMyntraDoc, role 'bill'
- * @returns {{pairs, unmatchedLabels, unmatchedBills}}  pairs are
- *          {label, bill, score, ambiguous} in the order they were matched.
+ * @returns {{pairs, unmatchedLabels, unmatchedBills, orderedBy}}  pairs are
+ *          {label, bill, score, ambiguous}, oldest download first.
  */
 export function pairMyntraDocs(labels, bills) {
+  const { ordered, orderedBy } = orderByDownload(labels)
+
   const candidates = []
-  for (const label of labels) {
+  for (const label of ordered) {
     for (const bill of bills) {
       const score = scorePair(label, bill)
       if (score >= MATCH_FLOOR) candidates.push({ label, bill, score })
@@ -289,13 +324,15 @@ export function pairMyntraDocs(labels, bills) {
     pairs.push({ ...c, ambiguous: contested.has(c.label) || contested.has(c.bill) })
   }
 
-  // Keep the user's upload order rather than match strength — that's the order
-  // the sheets print in, and it's what they'll be holding.
-  pairs.sort((a, b) => labels.indexOf(a.label) - labels.indexOf(b.label))
+  // Print in download order rather than match strength — that's the order the
+  // sheets come out in, and match strength means nothing to whoever's holding
+  // them.
+  pairs.sort((a, b) => ordered.indexOf(a.label) - ordered.indexOf(b.label))
 
   return {
     pairs,
-    unmatchedLabels: labels.filter((l) => !usedLabels.has(l)),
+    orderedBy,
+    unmatchedLabels: ordered.filter((l) => !usedLabels.has(l)),
     unmatchedBills: bills.filter((b) => !usedBills.has(b)),
   }
 }

@@ -347,7 +347,9 @@ export default function App() {
         // Own-label artwork box. Also measured when nothing was detected, so
         // switching the marketplace over to "My label" by hand still trims.
         const ownLayout = mp === 'own' || mp === null ? await analyzeOwnLayout(buf.slice(0)) : null
-        newDocs.push({ name: file.name, size: file.size, buffer: buf, source: mp || 'amazon', detected: mp, layout, ownLayout })
+        // lastModified is the file's save time — for a downloaded file, the
+        // moment the download finished. Myntra pairing prints in that order.
+        newDocs.push({ name: file.name, size: file.size, lastModified: file.lastModified, buffer: buf, source: mp || 'amazon', detected: mp, layout, ownLayout })
       }
       if (!newDocs.length) return // all were duplicates
 
@@ -1192,9 +1194,10 @@ export default function App() {
                         </label>
                         <small className="hint">
                           Drop the shipping labels and the tax invoices in together. Each
-                          label is matched to its own bill by the buyer&rsquo;s address, then
-                          all labels print first and the bills follow on their own sheets,
-                          4 to a page, in the same order.
+                          label is matched to its own bill by the buyer&rsquo;s address, and
+                          the labels print in the order you downloaded them. All labels
+                          come first, then the bills on their own sheets, 4 to a page, in
+                          the same order.
                         </small>
 
                         {myntraPair && pairBusy && (
@@ -1274,7 +1277,10 @@ export default function App() {
                                 (pairInfo.unmatchedBills.length
                                   ? `, ${pairInfo.unmatchedBills.length} bill(s) without a label`
                                   : '') +
-                                '.'}
+                                '. ' +
+                                (pairInfo.orderedBy === 'time'
+                                  ? 'Printing in download order.'
+                                  : 'These files carry no download time — printing in the order you added them.')}
                           </small>
                         )}
                       </div>

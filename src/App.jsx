@@ -151,7 +151,16 @@ export default function App() {
   // Myntra label↔bill pairing (Myntra only — its label and invoice are two
   // separate PDFs). Off by default; everything else behaves exactly as before.
   const [myntraPair, setMyntraPair] = useState(false)
+  // Stamp each label with the SKU read off its paired bill. Depends on
+  // myntraPair being on (that's what tells us which bill goes with which
+  // label) — off by default so nobody gets a surprise addition to their labels.
+  const [myntraSku, setMyntraSku] = useState(false)
   const [pairInfo, setPairInfo] = useState(null) // {pairs, unmatchedLabels, unmatchedBills}
+
+  // Amazon needs no separate pairing step — label and invoice are already on
+  // the same page — so its SKU toggle stands alone. The SKU itself is read
+  // straight off the invoice's live PDF text (analyzeAmazonLayout, no OCR).
+  const [amazonSku, setAmazonSku] = useState(false)
   const [pairBusy, setPairBusy] = useState(false)
   const [pairProgress, setPairProgress] = useState({ done: 0, total: 0 })
 
@@ -515,22 +524,38 @@ export default function App() {
         ? NO_BILL_SOURCES.has(source)
         : docs.every((d) => NO_BILL_SOURCES.has(d.source))
       const pairing = myntraPair && canPair && pairInfo
+      // The SKU is already read into an Amazon file's layout at upload time
+      // (cheap — it's straight PDF text, no OCR); this just decides whether
+      // it's handed on to the renderer, so toggling it off never draws a
+      // stray strip. Mirrors the amazon/own/else layout pick used below.
+      // `effSource` defaults to the file's own detected source (batch mode);
+      // single-file mode passes the manually-overridden `source` instead,
+      // same as the ternary this replaces used to.
+      const layoutFor = (d, effSource = d.source) => {
+        if (effSource === 'own') return d.ownLayout
+        if (effSource !== 'amazon') return null
+        if (amazonSku || !d.layout) return d.layout
+        return d.layout.map((entry) => ({ ...entry, labels: entry.labels.map((b) => ({ ...b, skuText: '' })) }))
+      }
       if (pairing) {
         // Labels in matched order, then the bills in that SAME order, so the
         // nth sticker and the nth invoice belong to the same parcel. Anything
         // that couldn't be paired still prints, at the end of its own section.
         out2 = 'both'
-        const mk = (entry, role) => ({
+        const mk = (entry, role, skuText) => ({
           arrayBuffer: entry.doc.buffer.slice(0),
           source: 'myntra',
           role,
           flipkartCrop: MYNTRA_CROP,
+          skuText,
         })
         items = [
-          ...pairInfo.pairs.map((p) => mk(p.label, 'label')),
-          ...pairInfo.unmatchedLabels.map((l) => mk(l, 'label')),
-          ...pairInfo.pairs.map((p) => mk(p.bill, 'bill')),
-          ...pairInfo.unmatchedBills.map((b) => mk(b, 'bill')),
+          ...pairInfo.pairs.map((p) =>
+            mk(p.label, 'label', myntraSku && p.bill.skus?.length ? p.bill.skus.join(' + ') : ''),
+          ),
+          ...pairInfo.unmatchedLabels.map((l) => mk(l, 'label', '')), // no bill matched — nothing to read a SKU off
+          ...pairInfo.pairs.map((p) => mk(p.bill, 'bill', '')),
+          ...pairInfo.unmatchedBills.map((b) => mk(b, 'bill', '')),
         ]
       } else if (single) {
         out2 = noBillBatch ? 'labels' : output
@@ -539,7 +564,7 @@ export default function App() {
           source,
           splitRatio: splitPct / 100,
           flipkartCrop: crop,
-          layout: source === 'amazon' ? docs[0].layout : source === 'own' ? docs[0].ownLayout : null,
+          layout: layoutFor(docs[0], source),
         }]
       } else {
         out2 = noBillBatch ? 'labels' : output
@@ -548,7 +573,7 @@ export default function App() {
           source: d.source,
           splitRatio: 0.5,
           flipkartCrop: cropFor(d.source),
-          layout: d.source === 'amazon' ? d.layout : d.source === 'own' ? d.ownLayout : null,
+          layout: layoutFor(d),
         }))
       }
       const { bytes, labelCount, billCount, sheetCount } = await buildCombinedLabelPdf(items, {
@@ -579,7 +604,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, canPair, pairInfo])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, myntraSku, amazonSku, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -614,6 +639,8 @@ export default function App() {
     setDocs([])
     setError('')
     setMyntraPair(false)
+    setMyntraSku(false)
+    setAmazonSku(false)
     setPairInfo(null)
     ocrCache.current.clear()
     setSource('amazon')
@@ -1112,7 +1139,7 @@ export default function App() {
                     </div>
 
                     {source === 'amazon' ? (
-                      <label className="ctrl">
+                      <div className="ctrl">
                         <span className="ctrl__label">
                           Label width <b className="val">{splitPct}%</b>
                         </span>
@@ -1127,7 +1154,22 @@ export default function App() {
                           Slide left if the invoice still shows; right if the label is
                           cut off. 50% suits most Amazon sheets.
                         </small>
-                      </label>
+
+                        <label className="switch switch--nested">
+                          <input
+                            type="checkbox"
+                            checked={amazonSku}
+                            onChange={(e) => setAmazonSku(e.target.checked)}
+                          />
+                          <span className="switch__track" />
+                          <span className="switch__text">Also print the SKU on each label</span>
+                        </label>
+                        <small className="hint">
+                          Reads the item code off the invoice on the same page (e.g.
+                          &ldquo;RRC-001-CO-C-RED-L&rdquo;) and stamps it under the label
+                          artwork, so you know what to pack without opening the invoice.
+                        </small>
+                      </div>
                     ) : ownTrimmed ? (
                       <div className="ctrl">
                         <span className="ctrl__label">Your label</span>
@@ -1200,6 +1242,25 @@ export default function App() {
                           the same order.
                         </small>
 
+                        {myntraPair && (
+                          <label className="switch switch--nested">
+                            <input
+                              type="checkbox"
+                              checked={myntraSku}
+                              onChange={(e) => setMyntraSku(e.target.checked)}
+                            />
+                            <span className="switch__track" />
+                            <span className="switch__text">Also print the SKU on each label</span>
+                          </label>
+                        )}
+                        {myntraPair && myntraSku && (
+                          <small className="hint">
+                            Reads the item code off each matched bill (e.g. &ldquo;R-007-CO-B-BL-S&rdquo;)
+                            and stamps it under the label artwork, so you know what to pack
+                            without opening the invoice.
+                          </small>
+                        )}
+
                         {myntraPair && pairBusy && (
                           <small className="hint">
                             Reading the pages… {pairProgress.done}/{pairProgress.total}
@@ -1216,6 +1277,11 @@ export default function App() {
                                   <small>
                                     {p.label.doc.name} → {p.bill.doc.name}
                                     {p.label.pincode ? ` · ${p.label.pincode}` : ''}
+                                    {myntraSku
+                                      ? p.bill.skus?.length
+                                        ? ` · SKU ${p.bill.skus.join(' + ')}`
+                                        : ' · SKU not read'
+                                      : ''}
                                   </small>
                                 </span>
                                 <span

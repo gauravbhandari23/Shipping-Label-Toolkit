@@ -2,6 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { createWorker } from 'tesseract.js'
 import { extractVariantCodes } from './sku'
+import { findContentGap } from './gap'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -39,6 +40,11 @@ const BILL_MIN_PIXELS = 20_000_000
 // reads (which ends ~28-32%) and the signature/footer beneath. Only rendered
 // once a page is already known to be a bill — a label has nothing here.
 const SKU_BAND = { top: 0.36, bottom: 0.68 }
+
+// Render width (px) used only for the gap scan below — far less than
+// TARGET_W (that one needs OCR-grade resolution; finding a blank row-band
+// needs much less), so this stays fast even across a big batch.
+const GAP_SCAN_TARGET_W = 600
 
 let workerPromise = null
 
@@ -110,6 +116,57 @@ export async function readMyntraDoc(arrayBuffer) {
   }
 
   return { ...parsed, role, text, ocrFailed, skus, skuFailed }
+}
+
+/**
+ * Look for one big dead-space gap on a Myntra shipping-label page — same
+ * idea as gap.js/layout.js does for Amazon: the label is a single flattened
+ * image with no live text/vector structure, so the only way to find a dead
+ * band baked into the middle of it is to render and scan for one.
+ *
+ * Independent of the buyer-block OCR pipeline above (and of whether the
+ * bill-pairing toggle is even on) — called once per Myntra file at upload
+ * time, and cheap: no OCR, just a render and a pixel scan. Scans the WHOLE
+ * page rather than a specific crop box, so it stays valid even if the user
+ * nudges the crop's left/right edges afterward (MYNTRA_CROP's usual
+ * adjustment): only the top/bottom bounds here matter, and this only
+ * changes if someone starts cropping vertically too.
+ *
+ * A file that turns out to be a BILL rather than a label still gets scanned
+ * (role isn't known yet without OCR) — harmless, since only a label's own
+ * gap is ever read by the renderer.
+ *
+ * @param {ArrayBuffer} arrayBuffer  a COPY of the PDF bytes (pdf.js detaches it)
+ * @returns {Promise<{top:number, bottom:number}|null>}  PDF y bounds of the
+ *          gap (points, bottom-left origin), or null if none found / on failure
+ */
+export async function detectMyntraLabelGap(arrayBuffer) {
+  try {
+    const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    try {
+      const page = await doc.getPage(1)
+      const [, y0, , y1] = page.view
+      const base = page.getViewport({ scale: 1 })
+      const scale = Math.min(4, Math.max(1, GAP_SCAN_TARGET_W / base.width))
+      const viewport = page.getViewport({ scale })
+
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.ceil(viewport.width)
+      canvas.height = Math.ceil(viewport.height)
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise
+      page.cleanup?.()
+
+      return findContentGap(canvas, y1, y0)
+    } finally {
+      if (typeof doc.destroy === 'function') await doc.destroy()
+    }
+  } catch (e) {
+    console.warn('[Rangrooh] gap scan failed for a Myntra page — printing it as one piece:', e)
+    return null
+  }
 }
 
 /**

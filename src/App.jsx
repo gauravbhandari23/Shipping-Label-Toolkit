@@ -13,7 +13,7 @@ import {
 import { detectMarketplace } from './detect'
 import { analyzeAmazonLayout } from './layout'
 import { analyzeOwnLayout } from './own'
-import { readMyntraDoc, pairMyntraDocs } from './myntra'
+import { readMyntraDoc, pairMyntraDocs, detectMyntraLabelGap } from './myntra'
 import logo from './assets/rangrooh-logo.png'
 
 // A page-filling grid: divides the A4 into totalCols×totalRows even cells with a
@@ -356,9 +356,12 @@ export default function App() {
         // Own-label artwork box. Also measured when nothing was detected, so
         // switching the marketplace over to "My label" by hand still trims.
         const ownLayout = mp === 'own' || mp === null ? await analyzeOwnLayout(buf.slice(0)) : null
+        // Myntra's own dead-space gap (see myntra.js) — measured once here so
+        // it prints tighter whether or not bill-pairing is ever turned on.
+        const myntraGap = mp === 'myntra' ? await detectMyntraLabelGap(buf.slice(0)) : null
         // lastModified is the file's save time — for a downloaded file, the
         // moment the download finished. Myntra pairing prints in that order.
-        newDocs.push({ name: file.name, size: file.size, lastModified: file.lastModified, buffer: buf, source: mp || 'amazon', detected: mp, layout, ownLayout })
+        newDocs.push({ name: file.name, size: file.size, lastModified: file.lastModified, buffer: buf, source: mp || 'amazon', detected: mp, layout, ownLayout, myntraGap })
       }
       if (!newDocs.length) return // all were duplicates
 
@@ -548,6 +551,7 @@ export default function App() {
           role,
           flipkartCrop: MYNTRA_CROP,
           skuText,
+          gap: role === 'label' ? entry.doc.myntraGap : null,
         })
         items = [
           ...pairInfo.pairs.map((p) =>
@@ -565,6 +569,7 @@ export default function App() {
           splitRatio: splitPct / 100,
           flipkartCrop: crop,
           layout: layoutFor(docs[0], source),
+          gap: source === 'myntra' ? docs[0].myntraGap : null,
         }]
       } else {
         out2 = noBillBatch ? 'labels' : output
@@ -574,6 +579,7 @@ export default function App() {
           splitRatio: 0.5,
           flipkartCrop: cropFor(d.source),
           layout: layoutFor(d),
+          gap: d.source === 'myntra' ? d.myntraGap : null,
         }))
       }
       const { bytes, labelCount, billCount, sheetCount } = await buildCombinedLabelPdf(items, {

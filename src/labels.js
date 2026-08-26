@@ -399,22 +399,18 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
 
     if (r.skuText && skuFont) {
-      // A hairline UNDER the text — right at the sticker's own bottom padding
-      // — makes clear the strip is added, not part of the courier's own
-      // artwork, without sitting above the code like a second header.
-      const stripW = labelW - pad * 2
-      const lineY = cellBottom + pad
-      const lineGap = 0.8 * MM
+      // A hairline divider makes clear the strip is added, not part of the
+      // courier's own artwork — helpful since it sits flush under it.
       outPage.drawLine({
-        start: { x: cellLeft + pad, y: lineY },
-        end: { x: cellLeft + labelW - pad, y: lineY },
+        start: { x: cellLeft + pad, y: cellBottom + pad + stripH },
+        end: { x: cellLeft + labelW - pad, y: cellBottom + pad + stripH },
         thickness: 0.4,
         color: rgb(0.75, 0.75, 0.75),
       })
-      const textBoxH = stripH - lineGap
-      const capSize = 8 // small caption size — this is a lookup aid, not a headline
-      const size = fitFontSize(skuFont, r.skuText, capSize, stripW, textBoxH)
-      drawCenteredText(outPage, skuFont, r.skuText, size, 'right', cellLeft + pad, lineY + lineGap, stripW, textBoxH)
+      const stripW = labelW - pad * 2
+      const capSize = Math.max(5, stripH - 2)
+      const size = fitFontSize(skuFont, r.skuText, capSize, stripW, stripH)
+      drawCenteredText(outPage, skuFont, r.skuText, size, 'center', cellLeft + pad, cellBottom + pad, stripW, stripH)
     }
   }
 }
@@ -831,7 +827,7 @@ function drawCenteredText(page, font, text, fontSize, align, x, y, w, h) {
   let cursorY = y + h / 2 + totalH / 2 - lineHeight + (lineHeight - fontSize) / 2
   for (const line of lines) {
     const tw = font.widthOfTextAtSize(line, fontSize)
-    const tx = align === 'left' ? x : align === 'right' ? x + w - tw : x + (w - tw) / 2
+    const tx = align === 'left' ? x : x + (w - tw) / 2
     page.drawText(line, { x: tx, y: cursorY, size: fontSize, font, color: rgb(0, 0, 0) })
     cursorY -= lineHeight
   }

@@ -162,7 +162,6 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       layout: item.layout || null,
       wantBills,
       skuText: item.skuText || '',
-      gap: item.gap || null,
     })
     allLabels.push(...labelRegions)
     allBills.push(...billRegions)
@@ -206,7 +205,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
  * Collect the label (and optional bill) crop regions for one source PDF,
  * per its marketplace layout. Regions reference the source pages directly.
  */
-function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills, skuText, gap }) {
+function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills, skuText }) {
   const labelRegions = []
   const billRegions = []
 
@@ -252,7 +251,6 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
           top: height * (1 - c.top),
           bottom: height * (1 - c.bottom),
           skuText: skuText || '',
-          gap: gap || null,
         })
       }
     }
@@ -269,7 +267,7 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
     // amazon, auto-detected: exact ink bounds per quadrant (never clips the top).
     srcPages.forEach((page, i) => {
       const entry = layout[i] || { labels: [], bills: [] }
-      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom, skuText: b.skuText || '', gap: b.gap || null })
+      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom, skuText: b.skuText || '' })
       if (wantBills) for (const b of entry.bills) billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
     })
   } else {
@@ -350,17 +348,17 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     }
 
     const r = regions[k]
-    // A region can carry a `gap` — a dead-space band (see gap.js/layout.js)
-    // to cut out of the middle rather than print. Only trust it if it's
-    // genuinely inside the region; anything else and this prints as ONE
-    // piece exactly like a region with no gap at all.
-    const gap = r.gap && r.gap.top < r.top && r.gap.bottom > r.bottom && r.gap.top > r.gap.bottom ? r.gap : null
+    // embedPage with a bounding box clips everything outside it — this isolates
+    // one quadrant. Result is crisp vector, not a rasterized image.
+    const embedded = await out.embedPage(r.page, {
+      left: r.left,
+      bottom: r.bottom,
+      right: r.right,
+      top: r.top,
+    })
 
     const regW = r.right - r.left
-    // With a gap, the content height is the two pieces ABOVE and BELOW it,
-    // not the full box — that's what should drive the fit-to-sticker scale,
-    // since the gap itself never gets drawn.
-    const regH = gap ? r.top - gap.top + (gap.bottom - r.bottom) : r.top - r.bottom
+    const regH = r.top - r.bottom
 
     // Fit the artwork inside the sticker (minus padding), keeping aspect ratio.
     // A region may cap its own scale (maxScale: 1 = never enlarge, print at the
@@ -398,39 +396,14 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     // Top-align inside the sticker so labels in the same row line up exactly.
     const y = cellBottom + labelH - drawH - pad - TOP_GAP * MM
 
-    if (gap) {
-      // Two embeds of the SAME source page, clipped above and below the gap,
-      // stacked with no space between them — the gap itself is simply never
-      // embedded. Both pieces share the one `scale` above, so they still line
-      // up edge-to-edge at full width.
-      const partBH = (gap.bottom - r.bottom) * scale // lower piece, drawn first (bottom-up)
-      const partAH = (r.top - gap.top) * scale // upper piece
-      const embeddedB = await out.embedPage(r.page, { left: r.left, bottom: r.bottom, right: r.right, top: gap.bottom })
-      const embeddedA = await out.embedPage(r.page, { left: r.left, bottom: gap.top, right: r.right, top: r.top })
-      outPage.drawPage(embeddedB, { x, y, width: drawW, height: partBH })
-      outPage.drawPage(embeddedA, { x, y: y + partBH, width: drawW, height: partAH })
-    } else {
-      // embedPage with a bounding box clips everything outside it — this
-      // isolates one quadrant. Result is crisp vector, not a rasterized image.
-      const embedded = await out.embedPage(r.page, { left: r.left, bottom: r.bottom, right: r.right, top: r.top })
-      outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
-    }
+    outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
 
     if (r.skuText && skuFont) {
-      // A hairline UNDER the text — right below the label artwork's own
-      // bottom edge — makes clear the strip is added, not part of the
-      // courier's own artwork, without sitting above the code like a second
-      // header. Anchored to `y` (the artwork's actual bottom edge) rather
-      // than the sticker's own padding: availH already reserved stripH
-      // before `scale` was computed, so y is always >= cellBottom+pad+stripH
-      // — equal when the artwork is height-bound (the usual case, strip sits
-      // flush against it), greater when a gap-compacted label ends up
-      // width-bound instead (shorter than the space reserved for it). Either
-      // way the strip stays glued to the artwork; any leftover room falls
-      // below the strip as ordinary sticker margin, never as a floating gap
-      // between the artwork and the code.
+      // A hairline UNDER the text — right at the sticker's own bottom padding
+      // — makes clear the strip is added, not part of the courier's own
+      // artwork, without sitting above the code like a second header.
       const stripW = labelW - pad * 2
-      const lineY = y - stripH
+      const lineY = cellBottom + pad
       const lineGap = 0.8 * MM
       outPage.drawLine({
         start: { x: cellLeft + pad, y: lineY },

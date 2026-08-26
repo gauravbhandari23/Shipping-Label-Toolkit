@@ -1,14 +1,8 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { extractVariantCodes } from './sku'
-import { findContentGap } from './gap'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
-
-// Target render width (px) for a label box when checking it for a dead-space
-// gap (see gap.js) — plenty of resolution to find a blank row-band reliably,
-// small enough that rendering every label in a batch stays fast.
-const GAP_SCAN_TARGET_W = 500
 
 // Breathing room (PDF points) added around each detected box.
 const PAD = 3
@@ -17,24 +11,17 @@ const PAD = 3
 const MIN_LABEL_FRAC = 0.2
 
 /**
- * Detect the label and invoice regions on an Amazon "label + invoice" sheet.
- * On these sheets each shipping label is a single flattened image (left
- * column) and each tax invoice is live text (right column). So we:
+ * Detect the label and invoice regions on an Amazon "label + invoice" sheet
+ * WITHOUT rendering the page. On these sheets each shipping label is a single
+ * flattened image (left column) and each tax invoice is live text (right
+ * column). So we:
  *   • read the operator list and track the transform to find the big label
  *     images and their exact placement (this needs no image decoding, so the
- *     JBig2/WASM barcode issues never come into play here);
- *   • read the text content to bound each invoice and read its SKU.
+ *     JBig2/WASM barcode issues never come into play);
+ *   • read the text content to bound each invoice.
  * The number of big label images tells us whether the sheet holds one order or
  * two, so empty halves never become phantom labels.
  *
- * One further step DOES render: each detected label box is checked for a
- * dead-space gap baked into the image (see gap.js) by rendering just that box
- * and scanning it. This is the one place this file touches image decoding —
- * scoped to a single label and wrapped so a decode failure there degrades to
- * "print this one label as one piece" rather than losing detection for the
- * whole file (see the try/catch around detectBoxGap below).
- *
-
  * @param {ArrayBuffer} arrayBuffer  a COPY of the PDF bytes (pdf.js detaches it)
  * @returns {Promise<Array<{labels: Box[], bills: Box[]}>|null>}  per page;
  *          Box = {left, bottom, right, top} in PDF points (origin bottom-left).
@@ -134,31 +121,14 @@ export async function analyzeAmazonLayout(arrayBuffer) {
           top: Math.min(y1, im.t + PAD),
         }
 
-      const labelBoxes = []
-      for (let idx = 0; idx < labelImgs.length; idx++) {
-        const box = clamp(labelImgs[idx])
-        if (!box) continue
-        box.skuText = (orderSkus[idx] || []).join(' + ')
-        // Amazon's label is a single flattened image, and it can carry a big
-        // blank band baked into the middle (its own routing-code table sits
-        // apart from the seller/invoice table above it). There's no live
-        // text/vector structure to read that from — see gap.js — so this
-        // renders just the label box and looks for one. A render/detection
-        // failure here (corrupt image, decode error, whatever) must never
-        // take down layout detection for the whole file, so it's scoped to
-        // just this one label: caught locally, falls back to printing the
-        // box as one piece, exactly like before this existed.
-        try {
-          const gap = await detectBoxGap(page, box)
-          if (gap) box.gap = gap
-        } catch (e) {
-          console.warn('[Rangrooh] gap scan failed for one Amazon label — printing it as one piece:', e)
-        }
-        labelBoxes.push(box)
-      }
-
       out.push({
-        labels: labelBoxes,
+        labels: labelImgs
+          .map((im, idx) => {
+            const box = clamp(im)
+            if (box) box.skuText = (orderSkus[idx] || []).join(' + ')
+            return box
+          })
+          .filter(Boolean),
         bills: billRects.map(clamp).filter(Boolean),
       })
       page.cleanup?.()
@@ -172,34 +142,6 @@ export async function analyzeAmazonLayout(arrayBuffer) {
     console.warn('[Rangrooh] label auto-detect failed — using fallback crop:', e)
     return null
   }
-}
-
-/**
- * Render just one box of a page (PDF points, bottom-left origin) to a canvas,
- * then hand it to findContentGap. Returns null if nothing conclusive is found
- * — see gap.js for what "conclusive" means.
- */
-async function detectBoxGap(page, box) {
-  const w = box.right - box.left
-  const h = box.top - box.bottom
-  if (w <= 0 || h <= 0) return null
-  const scale = Math.min(4, Math.max(1, GAP_SCAN_TARGET_W / w))
-  const viewport = page.getViewport({ scale })
-
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.ceil(w * scale))
-  canvas.height = Math.max(1, Math.ceil(h * scale))
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  // pdf.js always draws using the FULL page's viewport transform — shifting
-  // the canvas by the box's own top-left is what clips out just this box
-  // (same technique as myntra.js's renderBand, extended to the X axis too
-  // since this box isn't full-width).
-  ctx.translate(-box.left * scale, -(page.view[3] - box.top) * scale)
-  await page.render({ canvasContext: ctx, viewport, canvas }).promise
-
-  return findContentGap(canvas, box.top, box.bottom)
 }
 
 // 2x3 affine matrix helpers ([a,b,c,d,e,f], PDF convention).

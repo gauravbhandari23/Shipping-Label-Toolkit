@@ -1,6 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import { extractVariantCodes } from './sku'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -93,24 +92,15 @@ export async function analyzeAmazonLayout(arrayBuffer) {
       }
 
       let billRects
-      let orderSkus
       if (labelImgs.length >= 2) {
         // Two orders: split the right column at the midline into two invoices.
         billRects = [
           union(rightRects.filter((r) => (r.b + r.t) / 2 > midY)),
           union(rightRects.filter((r) => (r.b + r.t) / 2 <= midY)),
         ]
-        // Same top/bottom split over ALL page text (not just the right
-        // column) to pull each order's own item line — its SKU sits in the
-        // invoice half, in reading order alongside `labelImgs` (top first).
-        orderSkus = [
-          extractVariantCodes(tc.items.filter((it) => it.transform && it.transform[5] > midY).map((it) => it.str).join(' ')),
-          extractVariantCodes(tc.items.filter((it) => it.transform && it.transform[5] <= midY).map((it) => it.str).join(' ')),
-        ]
       } else {
         // One order: the whole right-column block is a single invoice.
         billRects = [union(rightRects)]
-        orderSkus = [extractVariantCodes(tc.items.map((it) => it.str).join(' '))]
       }
 
       const clamp = (im) =>
@@ -122,13 +112,7 @@ export async function analyzeAmazonLayout(arrayBuffer) {
         }
 
       out.push({
-        labels: labelImgs
-          .map((im, idx) => {
-            const box = clamp(im)
-            if (box) box.skuText = (orderSkus[idx] || []).join(' + ')
-            return box
-          })
-          .filter(Boolean),
+        labels: labelImgs.map(clamp).filter(Boolean),
         bills: billRects.map(clamp).filter(Boolean),
       })
       page.cleanup?.()

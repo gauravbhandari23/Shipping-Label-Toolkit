@@ -1,7 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { createWorker } from 'tesseract.js'
-import { extractVariantCodes } from './sku'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -32,14 +31,6 @@ const TOP_FRACTION = 0.45
 // ~10.0M px on Myntra's own exports). Only used when OCR can't classify.
 const BILL_MIN_PIXELS = 20_000_000
 
-// Middle band of an INVOICE page (fractions of page height) where the item
-// table sits — measured off a real invoice: the item line (with its SKU)
-// prints at ~44%, bracketed by "GSTIN Number" above (~37%) and the "TOTAL"
-// row below (~55%). Comfortably clear of the buyer block the main OCR pass
-// reads (which ends ~28-32%) and the signature/footer beneath. Only rendered
-// once a page is already known to be a bill — a label has nothing here.
-const SKU_BAND = { top: 0.36, bottom: 0.68 }
-
 let workerPromise = null
 
 /** Lazily start one shared OCR worker and keep it for the session. */
@@ -68,16 +59,13 @@ export async function disposeOcr() {
 
 /**
  * Read one Myntra PDF: work out whether it's a shipping label or a tax invoice,
- * and pull the buyer's name / address / pincode off it. Bills also get a
- * second, targeted OCR pass over the item table to read the SKU(s).
+ * and pull the buyer's name / address / pincode off it.
  *
  * @param {ArrayBuffer} arrayBuffer  a COPY of the PDF bytes (pdf.js detaches it)
- * @returns {Promise<{role, name, address, pincode, text, ocrFailed, skus, skuFailed}>}
+ * @returns {Promise<{role, name, address, pincode, text, ocrFailed}>}
  */
 export async function readMyntraDoc(arrayBuffer) {
-  // Slice off a fresh copy for each pdf.js load below — pdf.js detaches
-  // whatever ArrayBuffer it's handed, so the original can only be read once.
-  const { canvas, imagePixels } = await renderTopSlice(arrayBuffer.slice(0))
+  const { canvas, imagePixels } = await renderTopSlice(arrayBuffer)
 
   let text = ''
   let ocrFailed = false
@@ -94,22 +82,7 @@ export async function readMyntraDoc(arrayBuffer) {
   // OCR wording decides the role; fall back to the page's image size if the
   // text was too poor to tell (or OCR never ran).
   const role = parsed.role || (imagePixels >= BILL_MIN_PIXELS ? 'bill' : 'label')
-
-  let skus = []
-  let skuFailed = false
-  if (role === 'bill') {
-    try {
-      const band = await renderBand(arrayBuffer.slice(0), SKU_BAND.top, SKU_BAND.bottom)
-      const worker = await getOcrWorker()
-      const { data } = await worker.recognize(band)
-      skus = extractVariantCodes(data?.text || '')
-    } catch (e) {
-      console.warn('[Rangrooh] Could not read the SKU off a Myntra bill:', e)
-      skuFailed = true
-    }
-  }
-
-  return { ...parsed, role, text, ocrFailed, skus, skuFailed }
+  return { ...parsed, role, text, ocrFailed }
 }
 
 /**
@@ -137,41 +110,6 @@ async function renderTopSlice(arrayBuffer) {
     const imagePixels = await biggestImagePixels(page)
     page.cleanup?.()
     return { canvas, imagePixels }
-  } finally {
-    if (typeof doc.destroy === 'function') await doc.destroy()
-  }
-}
-
-/**
- * Render an arbitrary vertical band of page 1 (fractions of the full page
- * height) to a canvas — a second, targeted OCR pass at a spot the main top
- * slice doesn't reach (see SKU_BAND).
- */
-async function renderBand(arrayBuffer, topFraction, bottomFraction) {
-  const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-  try {
-    const page = await doc.getPage(1)
-    const base = page.getViewport({ scale: 1 })
-    const scale = Math.min(4, Math.max(1, TARGET_W / base.width))
-    const viewport = page.getViewport({ scale })
-
-    const bandTop = viewport.height * topFraction
-    const bandBottom = viewport.height * bottomFraction
-
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.ceil(viewport.width)
-    canvas.height = Math.ceil(bandBottom - bandTop)
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    // pdf.js always draws the page from (0,0) — shifting the canvas up by the
-    // band's own top is what clips out a slice that doesn't start at the
-    // page's top edge (renderTopSlice only needs to clip the BOTTOM, which a
-    // short canvas does for free; a middle band needs this instead).
-    ctx.translate(0, -bandTop)
-    await page.render({ canvasContext: ctx, viewport, canvas }).promise
-    page.cleanup?.()
-    return canvas
   } finally {
     if (typeof doc.destroy === 'function') await doc.destroy()
   }

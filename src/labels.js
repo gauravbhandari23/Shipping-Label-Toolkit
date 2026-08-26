@@ -9,12 +9,6 @@ const MM = 72 / 25.4
 // horizontal cut line. The label shrinks to fit, so it never overflows.
 const TOP_GAP = 2
 
-// Height (mm) reserved at the bottom of a sticker for the SKU strip — see
-// `skuText` on a label region (Myntra: read off the paired bill; Amazon: read
-// off the same page's invoice text). The label artwork shrinks to fit above
-// it, so the strip never overlaps the courier's own barcode/text.
-const SKU_STRIP_MM = 6
-
 // Default template: Avery L7169 / J8169 — sold in India as "A4 ST4".
 // A4 page, 4 labels (2 cols x 2 rows), each 99.1 x 139 mm. All values in mm.
 export const DEFAULT_SHEET = {
@@ -113,15 +107,10 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
  * Labels from every file are packed together onto the sticker sheets; bills are
  * grouped by their source so each marketplace's invoices lay out correctly.
  *
- * @param {Array<{arrayBuffer, source, role?, splitRatio?, flipkartCrop?, layout?, skuText?}>} items
+ * @param {Array<{arrayBuffer, source, role?, splitRatio?, flipkartCrop?, layout?}>} items
  *        `role` only applies to Myntra, whose label and invoice arrive as two
  *        separate PDFs: 'bill' marks the file as an invoice, anything else (the
- *        default) treats it as a shipping label. Either marketplace can stamp
- *        a small SKU strip under a label's artwork: Myntra via this top-level
- *        `skuText` (the code read off the label's PAIRED bill, see myntra.js),
- *        Amazon via `skuText` on each box inside `layout` (read straight off
- *        that order's own invoice text, see layout.js) since one Amazon file
- *        holds several orders' labels at once.
+ *        default) treats it as a shipping label.
  * @param {object} options  shared layout options (innerPad, showOutlines,
  *        includeBills, billsOnly, pairs, sheet, startSlot, hAlign, outwardX)
  * @returns {Promise<{bytes, labelCount, billCount, sheetCount}>}
@@ -161,7 +150,6 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       flipkartCrop: item.flipkartCrop || FLIPKART_CROP,
       layout: item.layout || null,
       wantBills,
-      skuText: item.skuText || '',
     })
     allLabels.push(...labelRegions)
     allBills.push(...billRegions)
@@ -205,7 +193,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
  * Collect the label (and optional bill) crop regions for one source PDF,
  * per its marketplace layout. Regions reference the source pages directly.
  */
-function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills, skuText }) {
+function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills }) {
   const labelRegions = []
   const billRegions = []
 
@@ -244,14 +232,7 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
       if (role === 'bill') {
         if (wantBills) billRegions.push({ page, left: 0, right: width, top: height, bottom: 0 })
       } else {
-        labelRegions.push({
-          page,
-          left: c.left * width,
-          right: c.right * width,
-          top: height * (1 - c.top),
-          bottom: height * (1 - c.bottom),
-          skuText: skuText || '',
-        })
+        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
       }
     }
   } else if (source === 'flipkart') {
@@ -267,7 +248,7 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
     // amazon, auto-detected: exact ink bounds per quadrant (never clips the top).
     srcPages.forEach((page, i) => {
       const entry = layout[i] || { labels: [], bills: [] }
-      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom, skuText: b.skuText || '' })
+      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
       if (wantBills) for (const b of entry.bills) billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
     })
   } else {
@@ -313,10 +294,6 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
   const gapX = sheet.gapX * MM
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
-  const skuStripH = SKU_STRIP_MM * MM
-  // Only embed the font if at least one region actually needs the strip —
-  // most callers (Amazon/Flipkart/plain Myntra) never carry `skuText`.
-  const skuFont = regions.some((r) => r.skuText) ? await out.embedFont(StandardFonts.HelveticaBold) : null
 
   // Offset every label by the chosen start position so the first one lands in
   // the spot the user picked (skipping any stickers already peeled off).
@@ -363,11 +340,8 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     // Fit the artwork inside the sticker (minus padding), keeping aspect ratio.
     // A region may cap its own scale (maxScale: 1 = never enlarge, print at the
     // size it was drawn) and pick its own alignment, whatever the batch default.
-    // A region carrying `skuText` gives up a strip at the bottom for it, so the
-    // artwork fits into the space left above.
-    const stripH = r.skuText ? skuStripH : 0
     const availW = labelW - pad * 2
-    const availH = labelH - pad * 2 - TOP_GAP * MM - stripH
+    const availH = labelH - pad * 2 - TOP_GAP * MM
     const scale = Math.min(availW / regW, availH / regH, r.maxScale ?? Infinity)
     const drawW = regW * scale
     const drawH = regH * scale
@@ -397,21 +371,6 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const y = cellBottom + labelH - drawH - pad - TOP_GAP * MM
 
     outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
-
-    if (r.skuText && skuFont) {
-      // A hairline divider makes clear the strip is added, not part of the
-      // courier's own artwork — helpful since it sits flush under it.
-      outPage.drawLine({
-        start: { x: cellLeft + pad, y: cellBottom + pad + stripH },
-        end: { x: cellLeft + labelW - pad, y: cellBottom + pad + stripH },
-        thickness: 0.4,
-        color: rgb(0.75, 0.75, 0.75),
-      })
-      const stripW = labelW - pad * 2
-      const capSize = Math.max(5, stripH - 2)
-      const size = fitFontSize(skuFont, r.skuText, capSize, stripW, stripH)
-      drawCenteredText(outPage, skuFont, r.skuText, size, 'center', cellLeft + pad, cellBottom + pad, stripW, stripH)
-    }
   }
 }
 

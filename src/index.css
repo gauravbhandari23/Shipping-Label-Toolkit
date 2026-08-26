@@ -933,26 +933,6 @@ input[type='range']::-webkit-slider-thumb:active {
   line-height: 1.4;
 }
 
-.switch--nested {
-  margin-left: 20px;
-  margin-top: 8px;
-  font-size: 12.5px;
-}
-
-.switch--nested .switch__track {
-  width: 32px;
-  height: 19px;
-}
-
-.switch--nested .switch__track::after {
-  width: 15px;
-  height: 15px;
-}
-
-.switch--nested input:checked + .switch__track::after {
-  transform: translateX(13px);
-}
-
 /* ---------- Advanced toggle ---------- */
 .adv-toggle {
   align-self: flex-start;

@@ -9,6 +9,18 @@ const MM = 72 / 25.4
 // horizontal cut line. The label shrinks to fit, so it never overflows.
 const TOP_GAP = 2
 
+// Where the SKU strip lands inside a label's own drawn box, as a fraction of
+// its height measured up from the BOTTOM — printed straight into blank space
+// the label artwork already has, not appended as extra height. Measured off
+// real samples: Amazon has a clear band between the "Customer Self
+// Declaration" table and the sort-code grid (~78-86% down the page, i.e.
+// ~14-22% up from the bottom); Myntra has one line of clearance above the
+// "Buyer Declaration" rule at the very bottom (~8-10% up).
+const AMAZON_SKU_Y_FRAC = 0.19
+const MYNTRA_SKU_Y_FRAC = 0.09
+// Inset from the label's own right/left edge, as a fraction of its width.
+const SKU_X_INSET_FRAC = 0.04
+
 // Default template: Avery L7169 / J8169 — sold in India as "A4 ST4".
 // A4 page, 4 labels (2 cols x 2 rows), each 99.1 x 139 mm. All values in mm.
 export const DEFAULT_SHEET = {
@@ -132,6 +144,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
   const wantBills = pairs || includeBills || billsOnly
 
   const out = await PDFDocument.create()
+  const skuFont = await out.embedFont(StandardFonts.HelveticaBold)
   const allLabels = []
   const allBills = []
   const flipkartBills = [] // full-width invoices stack 2 per page
@@ -150,6 +163,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       flipkartCrop: item.flipkartCrop || FLIPKART_CROP,
       layout: item.layout || null,
       wantBills,
+      skuText: item.skuText,
     })
     allLabels.push(...labelRegions)
     allBills.push(...billRegions)
@@ -166,7 +180,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     await placePairs(out, allLabels, allBills, 2)
   } else {
     if (wantLabels) {
-      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign, outwardX)
+      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign, outwardX, skuFont)
     }
     if (wantBills) {
       // Myntra invoices go first among the bills so they line up 1:1 with the
@@ -193,7 +207,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
  * Collect the label (and optional bill) crop regions for one source PDF,
  * per its marketplace layout. Regions reference the source pages directly.
  */
-function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills }) {
+function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layout, wantBills, skuText }) {
   const labelRegions = []
   const billRegions = []
 
@@ -232,7 +246,15 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
       if (role === 'bill') {
         if (wantBills) billRegions.push({ page, left: 0, right: width, top: height, bottom: 0 })
       } else {
-        labelRegions.push({ page, left: c.left * width, right: c.right * width, top: height * (1 - c.top), bottom: height * (1 - c.bottom) })
+        labelRegions.push({
+          page,
+          left: c.left * width,
+          right: c.right * width,
+          top: height * (1 - c.top),
+          bottom: height * (1 - c.bottom),
+          skuText: skuText || '',
+          skuYFrac: MYNTRA_SKU_Y_FRAC,
+        })
       }
     }
   } else if (source === 'flipkart') {
@@ -248,7 +270,17 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
     // amazon, auto-detected: exact ink bounds per quadrant (never clips the top).
     srcPages.forEach((page, i) => {
       const entry = layout[i] || { labels: [], bills: [] }
-      for (const b of entry.labels) labelRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
+      for (const b of entry.labels) {
+        labelRegions.push({
+          page,
+          left: b.left,
+          right: b.right,
+          top: b.top,
+          bottom: b.bottom,
+          skuText: b.skuText || '',
+          skuYFrac: AMAZON_SKU_Y_FRAC,
+        })
+      }
       if (wantBills) for (const b of entry.bills) billRegions.push({ page, left: b.left, right: b.right, top: b.top, bottom: b.bottom })
     })
   } else {
@@ -283,7 +315,7 @@ function collectRegions(srcPages, { source, role, splitRatio, flipkartCrop, layo
  * on BOTH columns at once. Shifting every label the same way instead would
  * only help one of them and push the other into the cut.
  */
-async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0, hAlign = 'center', outwardX = 0) {
+async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startSlot = 0, hAlign = 'center', outwardX = 0, skuFont = null) {
   const perPage = sheet.cols * sheet.rows
   const pageW = sheet.pageW * MM
   const pageH = sheet.pageH * MM
@@ -371,6 +403,27 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const y = cellBottom + labelH - drawH - pad - TOP_GAP * MM
 
     outPage.drawPage(embedded, { x, y, width: drawW, height: drawH })
+
+    // Stamp the SKU straight into blank space the label artwork already has
+    // (no extra height, nothing else moves) — see AMAZON_SKU_Y_FRAC /
+    // MYNTRA_SKU_Y_FRAC for where that space sits on each marketplace's label.
+    if (r.skuText && skuFont) {
+      const insetX = drawW * SKU_X_INSET_FRAC
+      const maxW = Math.max(0, drawW - insetX * 2)
+      let fs = 6.5
+      let tw = skuFont.widthOfTextAtSize(r.skuText, fs)
+      if (tw > maxW && maxW > 0) {
+        fs = Math.max(4, fs * (maxW / tw))
+        tw = skuFont.widthOfTextAtSize(r.skuText, fs)
+      }
+      outPage.drawText(r.skuText, {
+        x: x + drawW - insetX - tw,
+        y: y + drawH * (r.skuYFrac ?? 0.1),
+        size: fs,
+        font: skuFont,
+        color: rgb(0, 0, 0),
+      })
+    }
   }
 }
 

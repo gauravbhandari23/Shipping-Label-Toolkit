@@ -14,10 +14,11 @@ const TOP_GAP = 2
 // the label artwork already has, not appended as extra height. Measured off
 // real samples: Amazon has a clear band between the "Customer Self
 // Declaration" table and the sort-code grid (~78-86% down the page, i.e.
-// ~14-22% up from the bottom); Myntra has one line of clearance above the
-// "Buyer Declaration" rule at the very bottom (~8-10% up).
+// ~14-22% up from the bottom); Myntra has a wider gap above the "Buyer
+// Declaration" rule than it first looked — 0.09 sat right on top of
+// "Purchase made" on a real render, so this sits clear above that rule.
 const AMAZON_SKU_Y_FRAC = 0.19
-const MYNTRA_SKU_Y_FRAC = 0.09
+const MYNTRA_SKU_Y_FRAC = 0.17
 // Inset from the label's own right/left edge, as a fraction of its width.
 const SKU_X_INSET_FRAC = 0.04
 

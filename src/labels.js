@@ -18,7 +18,7 @@ const TOP_GAP = 2
 // Declaration" rule than it first looked — 0.09 sat right on top of
 // "Purchase made" on a real render, so this sits clear above that rule.
 const AMAZON_SKU_Y_FRAC = 0.19
-const MYNTRA_SKU_Y_FRAC = 0.17
+const MYNTRA_SKU_Y_FRAC = 0.14
 // Inset from the label's own right/left edge, as a fraction of its width.
 const SKU_X_INSET_FRAC = 0.04
 

@@ -33,7 +33,7 @@ export const DEFAULT_SHEET = {
   labelH: 139,
   marginTop: 8.5, // sheet edge -> top of first row
   marginLeft: 5.85, // sheet edge -> left of first column
-  gapX: 0, // horizontal gap between columns
+  gapX: 2, // horizontal gap between columns — shifts the right column (top-right/bottom-right) right
   gapY: 0, // vertical gap between rows
 }
 

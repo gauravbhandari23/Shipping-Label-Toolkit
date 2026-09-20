@@ -35,6 +35,10 @@ export const DEFAULT_SHEET = {
   marginLeft: 5.85, // sheet edge -> left of first column
   gapX: 2, // horizontal gap between columns — shifts the right column (top-right/bottom-right) right
   gapY: 0, // vertical gap between rows
+  // Nudges ONLY the left column (top-left/bottom-left) right, closing up that
+  // much of gapX — the right column doesn't move. Compensates the left column
+  // printing slightly left of the pre-cut sticker sheet's own left column.
+  leftColNudge: 1,
 }
 
 // Flipkart: 1 order per page, label on TOP, invoice on BOTTOM. The crop is
@@ -327,6 +331,7 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
   const gapX = sheet.gapX * MM
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
+  const leftColNudge = (sheet.leftColNudge || 0) * MM
 
   // Offset every label by the chosen start position so the first one lands in
   // the spot the user picked (skipping any stickers already peeled off).
@@ -341,8 +346,10 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols) // row 0 = top
 
-    // Sticker rectangle, in PDF coords (origin bottom-left).
-    const cellLeft = mLeft + col * (labelW + gapX)
+    // Sticker rectangle, in PDF coords (origin bottom-left). Only the leftmost
+    // column (col 0 — top-left/bottom-left) gets leftColNudge; every other
+    // column's position is unaffected.
+    const cellLeft = mLeft + col * (labelW + gapX) + (col === 0 ? leftColNudge : 0)
     const cellTopFromTop = mTop + row * (labelH + gapY)
     const cellBottom = pageH - cellTopFromTop - labelH
 

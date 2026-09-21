@@ -39,6 +39,12 @@ export const DEFAULT_SHEET = {
   // much of gapX — the right column doesn't move. Compensates the left column
   // printing slightly left of the pre-cut sticker sheet's own left column.
   leftColNudge: 1,
+  // Nudges ONLY the right column (top-right/bottom-right) — negative = left,
+  // closing up more of gapX from the other side; the left column doesn't
+  // move. Combined with leftColNudge above, the middle gap is already down
+  // to ~1mm, so this is kept small (0.5mm) to avoid the two columns
+  // touching or overlapping on the physical sheet.
+  rightColNudge: -0.5,
 }
 
 // Flipkart: 1 order per page, label on TOP, invoice on BOTTOM. The crop is
@@ -332,6 +338,7 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
   const leftColNudge = (sheet.leftColNudge || 0) * MM
+  const rightColNudge = (sheet.rightColNudge || 0) * MM
 
   // Offset every label by the chosen start position so the first one lands in
   // the spot the user picked (skipping any stickers already peeled off).
@@ -346,10 +353,14 @@ async function placeOnSheets(out, regions, sheet, innerPad, showOutlines, startS
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols) // row 0 = top
 
-    // Sticker rectangle, in PDF coords (origin bottom-left). Only the leftmost
-    // column (col 0 — top-left/bottom-left) gets leftColNudge; every other
-    // column's position is unaffected.
-    const cellLeft = mLeft + col * (labelW + gapX) + (col === 0 ? leftColNudge : 0)
+    // Sticker rectangle, in PDF coords (origin bottom-left). Leftmost column
+    // (col 0 — top-left/bottom-left) gets leftColNudge; rightmost column
+    // (top-right/bottom-right) gets rightColNudge; any column in between
+    // (more than 2 cols) is unaffected.
+    const isLeftCol = col === 0
+    const isRightCol = col === sheet.cols - 1
+    const colNudge = isLeftCol ? leftColNudge : isRightCol ? rightColNudge : 0
+    const cellLeft = mLeft + col * (labelW + gapX) + colNudge
     const cellTopFromTop = mTop + row * (labelH + gapY)
     const cellBottom = pageH - cellTopFromTop - labelH
 

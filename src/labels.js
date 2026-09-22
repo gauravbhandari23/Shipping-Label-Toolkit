@@ -42,10 +42,11 @@ export const DEFAULT_SHEET = {
   // Nudges ONLY the right column (top-right/bottom-right) — negative = left,
   // closing up more of gapX from the other side; the left column doesn't
   // move. Combined with leftColNudge above (which closes the 2mm gapX down
-  // to ~1mm), this leaves a final ~0.25mm gap between columns — halved from
-  // the previous -0.5 (0.5mm gap) on request, still enough clearance to
-  // avoid the two columns touching or overlapping on the physical sheet.
-  rightColNudge: -0.75,
+  // to ~1mm), this leaves a final ~0.1mm gap between columns — moved further
+  // left on request (was -0.75 / 0.25mm gap). This is now razor-thin: if the
+  // physical sheet is pre-cut stickers (not plain paper you cut yourself),
+  // there's very little room left before the columns touch or overlap.
+  rightColNudge: -0.9,
 }
 
 // Flipkart: 1 order per page, label on TOP, invoice on BOTTOM. The crop is

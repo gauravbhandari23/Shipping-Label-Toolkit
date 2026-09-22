@@ -41,10 +41,11 @@ export const DEFAULT_SHEET = {
   leftColNudge: 1,
   // Nudges ONLY the right column (top-right/bottom-right) — negative = left,
   // closing up more of gapX from the other side; the left column doesn't
-  // move. Combined with leftColNudge above, the middle gap is already down
-  // to ~1mm, so this is kept small (0.5mm) to avoid the two columns
-  // touching or overlapping on the physical sheet.
-  rightColNudge: -0.5,
+  // move. Combined with leftColNudge above (which closes the 2mm gapX down
+  // to ~1mm), this leaves a final ~0.25mm gap between columns — halved from
+  // the previous -0.5 (0.5mm gap) on request, still enough clearance to
+  // avoid the two columns touching or overlapping on the physical sheet.
+  rightColNudge: -0.75,
 }
 
 // Flipkart: 1 order per page, label on TOP, invoice on BOTTOM. The crop is
@@ -520,6 +521,8 @@ export async function buildTextLabelPdf(options = {}) {
   const gapX = sheet.gapX * MM
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
+  const leftColNudge = (sheet.leftColNudge || 0) * MM
+  const rightColNudge = (sheet.rightColNudge || 0) * MM
   const offset = ((startSlot % perPage) + perPage) % perPage
 
   // Build the flat list of label texts. With `entries`, each size's text is
@@ -550,7 +553,8 @@ export async function buildTextLabelPdf(options = {}) {
 
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols)
-    const cellLeft = mLeft + col * (labelW + gapX)
+    const colNudge = col === 0 ? leftColNudge : col === sheet.cols - 1 ? rightColNudge : 0
+    const cellLeft = mLeft + col * (labelW + gapX) + colNudge
     const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
 
     if (showOutlines) {
@@ -618,6 +622,8 @@ export async function buildBarcodeLabelPdf(options = {}) {
   const gapX = sheet.gapX * MM
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
+  const leftColNudge = (sheet.leftColNudge || 0) * MM
+  const rightColNudge = (sheet.rightColNudge || 0) * MM
   const offset = ((startSlot % perPage) + perPage) % perPage
 
   // One sticker per copy, each entry's copies kept together in the order given.
@@ -652,7 +658,8 @@ export async function buildBarcodeLabelPdf(options = {}) {
 
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols)
-    const cellLeft = mLeft + col * (labelW + gapX)
+    const colNudge = col === 0 ? leftColNudge : col === sheet.cols - 1 ? rightColNudge : 0
+    const cellLeft = mLeft + col * (labelW + gapX) + colNudge
     const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
 
     if (showOutlines) {
@@ -736,6 +743,8 @@ export async function buildLogoLabelPdf(options = {}) {
   const gapX = sheet.gapX * MM
   const gapY = sheet.gapY * MM
   const pad = innerPad * MM
+  const leftColNudge = (sheet.leftColNudge || 0) * MM
+  const rightColNudge = (sheet.rightColNudge || 0) * MM
   const offset = ((startSlot % perPage) + perPage) % perPage
   const pct = Math.min(100, Math.max(5, sizePct)) / 100
 
@@ -760,7 +769,8 @@ export async function buildLogoLabelPdf(options = {}) {
 
     const col = slot % sheet.cols
     const row = Math.floor(slot / sheet.cols)
-    const cellLeft = mLeft + col * (labelW + gapX)
+    const colNudge = col === 0 ? leftColNudge : col === sheet.cols - 1 ? rightColNudge : 0
+    const cellLeft = mLeft + col * (labelW + gapX) + colNudge
     const cellBottom = pageH - (mTop + row * (labelH + gapY)) - labelH
 
     if (showOutlines) {

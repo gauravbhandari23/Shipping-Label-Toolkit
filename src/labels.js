@@ -42,12 +42,12 @@ export const DEFAULT_SHEET = {
   // Nudges ONLY the right column (top-right/bottom-right) — negative = left,
   // closing up more of gapX from the other side; the left column doesn't
   // move. Combined with leftColNudge above (which closes the 2mm gapX down
-  // to ~1mm), the sticker cells now overlap by ~1mm — moved further left on
-  // request (was -0.9 / 0.1mm gap). The printed artwork still clears: each
-  // label keeps ~2mm innerPad inside its cell, leaving ~3mm between the
+  // to ~1mm), the sticker cells now overlap by ~0.8mm — moved further left on
+  // request, then eased back 0.2mm (was -2). The printed artwork clears: each
+  // label keeps ~2mm innerPad inside its cell, leaving ~3.2mm between the
   // printed labels. On pre-cut sticker sheets the right column's artwork will
-  // sit ~1mm left of its sticker's centre.
-  rightColNudge: -2,
+  // sit ~0.8mm left of its sticker's centre.
+  rightColNudge: -1.8,
 }
 
 // Flipkart: 1 order per page, label on TOP, invoice on BOTTOM. The crop is

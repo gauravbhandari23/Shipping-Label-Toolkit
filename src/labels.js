@@ -112,6 +112,9 @@ export const OWN_EDGE_MARGIN = 3
  * @param {boolean} options.showOutlines  draw a thin border at each label position (for test prints)
  * @param {boolean} options.includeBills  if true, also output the bills after the labels
  * @param {boolean} options.billsOnly     if true, output ONLY the bills (no labels)
+ * @param {2|4}     options.billsPerPage  [amazon] bills per A4: 4 (default, one per quarter,
+ *                                        actual size) or 2 (each turned sideways to fill half
+ *                                        a page ~1.3x bigger; cut on the middle line)
  * @param {object}  options.sheet         label-sheet template in mm (see DEFAULT_SHEET)
  * @param {number}  options.startSlot     first sticker position to fill on the first sheet,
  *                                        counting left-to-right, top-to-bottom (0 = top-left).
@@ -138,7 +141,7 @@ export async function buildLabelPdf(arrayBuffer, options = {}) {
  *        separate PDFs: 'bill' marks the file as an invoice, anything else (the
  *        default) treats it as a shipping label.
  * @param {object} options  shared layout options (innerPad, showOutlines,
- *        includeBills, billsOnly, pairs, sheet, startSlot, hAlign, outwardX)
+ *        includeBills, billsOnly, billsPerPage, pairs, sheet, startSlot, hAlign, outwardX)
  * @returns {Promise<{bytes, labelCount, billCount, sheetCount}>}
  */
 export async function buildCombinedLabelPdf(items, options = {}) {
@@ -147,6 +150,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     showOutlines = false,
     includeBills = false,
     billsOnly = false,
+    billsPerPage = 4, // Amazon bills only: 4 or 2 per A4
     pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
@@ -204,7 +208,10 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       // paper, so honouring it here would just waste a corner of every page.
       if (myntraBills.length) await placeOnSheets(out, myntraBills, sheet, innerPad, showOutlines, 0)
       if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
-      if (stickerBills.length) await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
+      if (stickerBills.length) {
+        if (billsPerPage === 2) await placeTwoUpRotated(out, stickerBills)
+        else await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
+      }
     }
   }
 
@@ -485,6 +492,51 @@ async function placeStacked(out, regions, rows, startBand = 0) {
     const x = (pageW - drawW) / 2
     const y = bandBottom + (bandH - drawH) / 2
     page.drawPage(embedded, { x, y, width: drawW, height: drawH })
+  }
+}
+
+/**
+ * Amazon bills, 2 per portrait A4: each bill (a portrait quarter-page) is
+ * turned 90° so it fills one half of the sheet — about 1.3x bigger than the
+ * 4-up size. Cut along the dashed middle line and each half is a normal A5
+ * sheet with the bill upright (turn it a quarter clockwise to read). Always
+ * starts from the top half: bills go on plain paper, nothing to skip.
+ */
+async function placeTwoUpRotated(out, regions) {
+  const pageW = 210 * MM
+  const pageH = 297 * MM
+  const margin = 6 * MM
+  const bandH = pageH / 2
+  const availW = pageW - margin * 2
+  const availH = bandH - margin * 2
+
+  let page = null
+  for (let k = 0; k < regions.length; k++) {
+    const slot = k % 2
+    if (slot === 0) {
+      page = out.addPage([pageW, pageH])
+      page.drawLine({
+        start: { x: 0, y: bandH },
+        end: { x: pageW, y: bandH },
+        thickness: 0.5,
+        color: rgb(0.6, 0.6, 0.6),
+        dashArray: [4, 4],
+      })
+    }
+    const r = regions[k]
+    const embedded = await out.embedPage(r.page, { left: r.left, bottom: r.bottom, right: r.right, top: r.top })
+    const regW = r.right - r.left
+    const regH = r.top - r.bottom
+    // Rotated, the bill's height runs across the page and its width runs up it.
+    const scale = Math.min(availW / regH, availH / regW)
+    const drawW = regW * scale
+    const drawH = regH * scale
+    const bandBottom = pageH - (slot + 1) * bandH // slot 0 = top half
+    const boxX = (pageW - drawH) / 2
+    const boxY = bandBottom + (bandH - drawW) / 2
+    // A 90° (counter-clockwise) turn pivots on (x, y): the drawn box then
+    // spans x-drawH..x across and y..y+drawW up — so pivot at its right edge.
+    page.drawPage(embedded, { x: boxX + drawH, y: boxY, width: drawW, height: drawH, rotate: degrees(90) })
   }
 }
 

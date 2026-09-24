@@ -21,7 +21,12 @@ npm run dev      # then open the printed http://localhost:5173 link
 2. Check the live preview on the right.
 3. If a sliver of invoice still shows, or a label is clipped, nudge the
    **Label width** slider. 50% suits most Amazon sheets.
-4. Click **Download labels PDF** → saves `<yourfile>_labels.pdf`.
+4. **What to export** → *Bills only* (or *Labels, then bills*) prints the tax
+   invoices too. For Amazon you can pick **4 per page** (one bill per quarter,
+   actual size) or **2 per page** (each bill turned sideways to fill half the
+   page, ~1.3× bigger — cut on the dashed middle line and each half is one
+   upright bill).
+5. Click **Download labels PDF** → saves `<yourfile>_labels.pdf`.
 
 ## Make a standalone version (optional)
 ```bash

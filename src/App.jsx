@@ -145,6 +145,7 @@ export default function App() {
   const [nudgeOut, setNudgeOut] = useState(0) // mm each label moves off the centre line
   const [showOutlines, setShowOutlines] = useState(false)
   const [output, setOutput] = useState('labels') // 'labels' | 'pairs' | 'both' | 'bills'
+  const [billsPerPage, setBillsPerPage] = useState(4) // Amazon bills: 4 (actual size) or 2 (bigger)
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
   const [startSlot, setStartSlot] = useState(0) // first sticker position to fill
 
@@ -581,6 +582,7 @@ export default function App() {
         showOutlines,
         includeBills: out2 === 'both',
         billsOnly: out2 === 'bills',
+        billsPerPage,
         pairs: out2 === 'pairs',
         sheet,
         startSlot: Math.min(startSlot, perPage - 1),
@@ -604,7 +606,7 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, sheet, startSlot, perPage, myntraPair, myntraSku, amazonSku, canPair, pairInfo])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, billsPerPage, sheet, startSlot, perPage, myntraPair, myntraSku, amazonSku, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -619,6 +621,7 @@ export default function App() {
     setNudgeOut(0)
     setShowOutlines(false)
     setOutput('labels')
+    setBillsPerPage(4)
     setSheet(DEFAULT_SHEET)
     setStartSlot(0)
     setBold(true)
@@ -944,6 +947,9 @@ export default function App() {
     (single ? NO_BILL_SOURCES.has(source) : docs.every((d) => NO_BILL_SOURCES.has(d.source)))
   // Your own label, with its artwork box measured — no crop fields needed.
   const ownTrimmed = single && source === 'own' && !!docs[0]?.ownLayout
+  // The 2-or-4 bills-per-page choice only applies to Amazon bills.
+  const hasAmazonBills = docs.length > 0 && (single ? source === 'amazon' : docs.some((d) => d.source === 'amazon'))
+  const amazonBillsLabel = billsPerPage === 2 ? '2 per page, bigger' : '4 per page'
 
   return (
     <div className="app">
@@ -1420,8 +1426,34 @@ export default function App() {
                           : output === 'pairs'
                             ? 'Each order kept together — label on the left, its bill on the right, 2 per page.'
                             : output === 'both'
-                              ? `Labels first, then the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole).`
-                              : `Only the bills (${source === 'flipkart' ? '2' : '4'} per page, each kept whole) — no labels.`}
+                              ? `Labels first, then the bills (${hasAmazonBills && single ? amazonBillsLabel : source === 'flipkart' ? '2 per page' : '4 per page'}, each kept whole).`
+                              : `Only the bills (${hasAmazonBills && single ? amazonBillsLabel : source === 'flipkart' ? '2 per page' : '4 per page'}, each kept whole) — no labels.`}
+                      </small>
+                    </div>
+                    )}
+
+                    {!noBills && hasAmazonBills && (output === 'bills' || output === 'both') && (
+                    <div className="ctrl">
+                      <span className="ctrl__label">Amazon bills per page</span>
+                      <div className="seg">
+                        {[
+                          [4, '4 per page'],
+                          [2, '2 per page'],
+                        ].map(([val, label]) => (
+                          <button
+                            key={val}
+                            type="button"
+                            className={'seg__btn' + (billsPerPage === val ? ' seg__btn--on' : '')}
+                            onClick={() => setBillsPerPage(val)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <small className="hint">
+                        {billsPerPage === 2
+                          ? 'Each bill turned sideways to fill half the page (about 1.3× bigger). Cut on the dashed middle line — each half is one bill.'
+                          : 'One bill in each quarter of the page, at its actual size.'}
                       </small>
                     </div>
                     )}

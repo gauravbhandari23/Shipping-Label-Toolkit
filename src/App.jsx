@@ -626,7 +626,7 @@ export default function App() {
       })
     } catch (e) {
       console.error(e)
-      setError(e.message.startsWith('No bills selected') ? e.message : 'Could not process the PDF(s): ' + e.message)
+      setError(e.message.startsWith('Nothing selected') ? e.message : 'Could not process the PDF(s): ' + e.message)
       setStats(null)
     } finally {
       setBusy(false)
@@ -1489,15 +1489,15 @@ export default function App() {
                     </div>
                     )}
 
-                    {!noBills && amazonBills && amazonBills.length > 1 && (output === 'bills' || output === 'both') && (
+                    {amazonBills && amazonBills.length > 1 && (
                     <div className="ctrl">
                       <span className="ctrl__label">
-                        Which Amazon bills{' '}
+                        Which orders to print{' '}
                         <b className="val">
                           {billPick ? billPick.size : amazonBills.length} of {amazonBills.length}
                         </b>
                       </span>
-                      <div className="billpick" role="group" aria-label="Choose which bills to print">
+                      <div className="billpick" role="group" aria-label="Choose which orders to print">
                         {amazonBills.map((b, i) => {
                           const on = !billPick || billPick.has(i)
                           return (
@@ -1511,7 +1511,7 @@ export default function App() {
                             >
                               <span className="billpick__num">{i + 1}</span>
                               <span className="billpick__meta">
-                                <span className="billpick__sku">{b.sku || 'Bill ' + (i + 1)}</span>
+                                <span className="billpick__sku">{b.sku || 'Order ' + (i + 1)}</span>
                                 {b.orderNo && <span className="billpick__order">{b.orderNo}</span>}
                               </span>
                             </button>
@@ -1527,9 +1527,8 @@ export default function App() {
                         </button>
                       </div>
                       <small className="hint">
-                        Tap a number to leave that bill out (or back in). Ticked bills print in number
-                        order — 1, 2, 3… — the same order as the labels.
-                        {output === 'both' ? ' Labels all still print.' : ''}
+                        Tap a number to leave that order out (or back in) — its label and its bill
+                        both follow. Ticked orders print in number order: 1, 2, 3…
                       </small>
                     </div>
                     )}

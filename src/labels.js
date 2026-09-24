@@ -115,10 +115,11 @@ export const OWN_EDGE_MARGIN = 3
  * @param {2|4}     options.billsPerPage  [amazon] bills per A4: 4 (default, one per quarter,
  *                                        actual size) or 2 (each turned sideways to fill half
  *                                        a page ~1.3x bigger; cut on the middle line)
- * @param {number[]} options.billPick     [amazon] which Amazon bills to print — 0-based
- *                                        positions in upload order (bill 1 = 0). Printed in
- *                                        that numeric order whatever order they were ticked
- *                                        in. Omit / null = every bill.
+ * @param {number[]} options.billPick     [amazon] which Amazon ORDERS to print — 0-based
+ *                                        positions in upload order (order 1 = 0). Applies to
+ *                                        each order's label AND bill; printed in numeric
+ *                                        order whatever order they were ticked in. Omit /
+ *                                        null = every order. Other marketplaces unaffected.
  * @param {object}  options.sheet         label-sheet template in mm (see DEFAULT_SHEET)
  * @param {number}  options.startSlot     first sticker position to fill on the first sheet,
  *                                        counting left-to-right, top-to-bottom (0 = top-left).
@@ -155,7 +156,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     includeBills = false,
     billsOnly = false,
     billsPerPage = 4, // Amazon bills only: 4 or 2 per A4
-    billPick = null, // Amazon bills only: indices to print (null = all)
+    billPick = null, // Amazon orders to print, by index (null = all)
     pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
@@ -173,6 +174,10 @@ export async function buildCombinedLabelPdf(items, options = {}) {
   const flipkartBills = [] // full-width invoices stack 2 per page
   const stickerBills = [] // Amazon half-page invoices pack onto sticker sheets
   const myntraBills = [] // whole-page tax invoices, one per A4
+  // Amazon order numbering for billPick: nth Amazon label / nth Amazon bill
+  // across the whole batch, in upload order (= order n on both).
+  let amazonLabelNo = 0
+  let amazonBillNo = 0
 
   for (const item of items) {
     const src = await PDFDocument.load(item.arrayBuffer)
@@ -188,6 +193,10 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       wantBills,
       skuText: item.skuText,
     })
+    if (source === 'amazon') {
+      for (const r of labelRegions) r.amazonNo = amazonLabelNo++
+      for (const r of billRegions) r.amazonNo = amazonBillNo++
+    }
     allLabels.push(...labelRegions)
     allBills.push(...billRegions)
     if (source === 'flipkart') flipkartBills.push(...billRegions)
@@ -199,20 +208,19 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     throw new Error('No pages found in the PDF(s).')
   }
 
-  // Only the ticked Amazon bills, in bill-number order. The pairs layout
-  // keeps every order's label + bill together, so it ignores the pick.
-  let pickedBills = stickerBills
-  if (Array.isArray(billPick) && !pairs) {
-    const pick = new Set(billPick)
-    pickedBills = stickerBills.filter((_, i) => pick.has(i))
-  }
-  const billTotal = pairs ? allBills.length : allBills.length - stickerBills.length + pickedBills.length
+  // Only the ticked Amazon orders (label + bill), kept in order-number order.
+  // Non-Amazon regions have no amazonNo and always stay.
+  const pick = Array.isArray(billPick) ? new Set(billPick) : null
+  const keep = (r) => !pick || r.amazonNo === undefined || pick.has(r.amazonNo)
+  const pickedLabels = allLabels.filter(keep)
+  const pickedAllBills = allBills.filter(keep)
+  const pickedBills = stickerBills.filter(keep)
 
   if (pairs) {
-    await placePairs(out, allLabels, allBills, 2)
+    await placePairs(out, pickedLabels, pickedAllBills, 2)
   } else {
     if (wantLabels) {
-      await placeOnSheets(out, allLabels, sheet, innerPad, showOutlines, startSlot, hAlign, outwardX, skuFont)
+      await placeOnSheets(out, pickedLabels, sheet, innerPad, showOutlines, startSlot, hAlign, outwardX, skuFont)
     }
     if (wantBills) {
       // Myntra invoices go first among the bills so they line up 1:1 with the
@@ -230,14 +238,14 @@ export async function buildCombinedLabelPdf(items, options = {}) {
   }
 
   if (!out.getPageCount()) {
-    throw new Error('No bills selected — tick at least one bill to print.')
+    throw new Error('Nothing selected — tick at least one order to print.')
   }
 
   const bytes = await out.save()
   return {
     bytes,
-    labelCount: wantLabels ? allLabels.length : 0,
-    billCount: wantBills ? billTotal : 0,
+    labelCount: wantLabels ? pickedLabels.length : 0,
+    billCount: wantBills ? pickedAllBills.length : 0,
     sheetCount: out.getPageCount(),
   }
 }

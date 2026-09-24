@@ -36,13 +36,13 @@ npm run dev      # then open the printed http://localhost:5173 link
    actual size) or **2 per page** (each bill turned sideways to fill half the
    page, ~1.3× bigger — cut on the dashed middle line and each half is one
    upright bill).
-   **Which Amazon bills** (shown when there are 2+ bills) lists every bill as a
-   numbered button — 1, 2, 3… — with its SKU and order number. Tap a number to
-   leave that bill out (or back in); *Select all* / *Clear*. The ticked bills
-   print in number order, the same order as the labels. With several PDFs the
-   numbering carries on across files in upload order. Labels are not affected
-   (they all print), and *Label + bill* always prints every order.
-5. Click **Download labels PDF** → saves `<yourfile>_labels.pdf`.
+5. **Which orders to print** (Amazon, shown whenever the PDF has 2+ orders,
+   right under *What to export*): every order is a numbered button — 1, 2, 3… —
+   with its SKU and order number. Tap a number to leave that order out (or back
+   in); *Select all* / *Clear*. It works with every export option: a ticked
+   order prints its label and/or bill, and they print in number order. With
+   several PDFs the numbering carries on across files in upload order.
+6. Click **Download labels PDF** → saves `<yourfile>_labels.pdf`.
 
 ## Make a standalone version (optional)
 ```bash
@@ -55,6 +55,6 @@ The `dist/` folder is fully self-contained and can be hosted anywhere.
 - `src/labels.js` — the PDF crop + pack logic (pdf-lib); `placeTwoUpRotated`
   is the Amazon 2-bills-per-page layout.
 - `src/layout.js` — auto-detects each Amazon label/invoice box (pdf.js), and
-  reads each invoice's order number + SKU for the bill picker.
+  reads each invoice's order number + SKU for the order picker.
 - `src/App.jsx`   — the UI.
 - `make-test-pdf.mjs` + `sample-amazon.pdf` — a fake Amazon PDF for testing.

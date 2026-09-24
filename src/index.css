@@ -1127,3 +1127,93 @@ input[type='range']::-webkit-slider-thumb:active {
 .foot__dot {
   color: var(--muted-2);
 }
+
+/* Amazon bill picker: one numbered toggle per bill, printed in number order. */
+.billpick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.billpick__btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.15s ease;
+}
+
+.billpick__btn--on {
+  border-color: var(--brand-2);
+  background: var(--surface);
+  color: var(--ink);
+  opacity: 1;
+  box-shadow: var(--shadow-sm);
+}
+
+.billpick__num {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.billpick__btn--on .billpick__num {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.billpick__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.billpick__sku,
+.billpick__order {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.billpick__sku {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.billpick__order {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.billpick__actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.billpick__link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--brand-ink);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}

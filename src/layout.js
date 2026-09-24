@@ -10,6 +10,13 @@ const PAD = 3
 // page in BOTH dimensions — filters out logos, barcodes and other small marks.
 const MIN_LABEL_FRAC = 0.2
 
+// Amazon order number as printed on the invoice ("Order Number: 407-6002808-4187546").
+const ORDER_NO_RE = /Order\s*(?:Number|No\.?|Id)\s*:?\s*(\d{3})\s*-\s*(\d{7})\s*-\s*(\d{7})/i
+function findOrderNo(text) {
+  const m = ORDER_NO_RE.exec(String(text || ''))
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : ''
+}
+
 /**
  * Detect the label and invoice regions on an Amazon "label + invoice" sheet
  * WITHOUT rendering the page. On these sheets each shipping label is a single
@@ -94,6 +101,7 @@ export async function analyzeAmazonLayout(arrayBuffer) {
 
       let billRects
       let orderSkus
+      let orderNos
       if (labelImgs.length >= 2) {
         // Two orders: split the right column at the midline into two invoices.
         billRects = [
@@ -107,10 +115,15 @@ export async function analyzeAmazonLayout(arrayBuffer) {
           extractVariantCodes(tc.items.filter((it) => it.transform && it.transform[5] > midY).map((it) => it.str).join(' ')),
           extractVariantCodes(tc.items.filter((it) => it.transform && it.transform[5] <= midY).map((it) => it.str).join(' ')),
         ]
+        orderNos = [
+          findOrderNo(tc.items.filter((it) => it.transform && it.transform[5] > midY).map((it) => it.str).join(' ')),
+          findOrderNo(tc.items.filter((it) => it.transform && it.transform[5] <= midY).map((it) => it.str).join(' ')),
+        ]
       } else {
         // One order: the whole right-column block is a single invoice.
         billRects = [union(rightRects)]
         orderSkus = [extractVariantCodes(tc.items.map((it) => it.str).join(' '))]
+        orderNos = [findOrderNo(tc.items.map((it) => it.str).join(' '))]
       }
 
       const clamp = (im) =>
@@ -129,7 +142,18 @@ export async function analyzeAmazonLayout(arrayBuffer) {
             return box
           })
           .filter(Boolean),
-        bills: billRects.map(clamp).filter(Boolean),
+        // orderNo/skuText on a bill are only for the bill picker's list —
+        // never drawn (bill regions are placed as-is).
+        bills: billRects
+          .map((im, idx) => {
+            const box = clamp(im)
+            if (box) {
+              box.orderNo = orderNos[idx] || ''
+              box.skuText = (orderSkus[idx] || []).join(' + ')
+            }
+            return box
+          })
+          .filter(Boolean),
       })
       page.cleanup?.()
     }

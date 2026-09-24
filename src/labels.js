@@ -115,6 +115,10 @@ export const OWN_EDGE_MARGIN = 3
  * @param {2|4}     options.billsPerPage  [amazon] bills per A4: 4 (default, one per quarter,
  *                                        actual size) or 2 (each turned sideways to fill half
  *                                        a page ~1.3x bigger; cut on the middle line)
+ * @param {number[]} options.billPick     [amazon] which Amazon bills to print — 0-based
+ *                                        positions in upload order (bill 1 = 0). Printed in
+ *                                        that numeric order whatever order they were ticked
+ *                                        in. Omit / null = every bill.
  * @param {object}  options.sheet         label-sheet template in mm (see DEFAULT_SHEET)
  * @param {number}  options.startSlot     first sticker position to fill on the first sheet,
  *                                        counting left-to-right, top-to-bottom (0 = top-left).
@@ -151,6 +155,7 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     includeBills = false,
     billsOnly = false,
     billsPerPage = 4, // Amazon bills only: 4 or 2 per A4
+    billPick = null, // Amazon bills only: indices to print (null = all)
     pairs = false,
     sheet = DEFAULT_SHEET,
     startSlot = 0,
@@ -194,6 +199,15 @@ export async function buildCombinedLabelPdf(items, options = {}) {
     throw new Error('No pages found in the PDF(s).')
   }
 
+  // Only the ticked Amazon bills, in bill-number order. The pairs layout
+  // keeps every order's label + bill together, so it ignores the pick.
+  let pickedBills = stickerBills
+  if (Array.isArray(billPick) && !pairs) {
+    const pick = new Set(billPick)
+    pickedBills = stickerBills.filter((_, i) => pick.has(i))
+  }
+  const billTotal = pairs ? allBills.length : allBills.length - stickerBills.length + pickedBills.length
+
   if (pairs) {
     await placePairs(out, allLabels, allBills, 2)
   } else {
@@ -208,18 +222,22 @@ export async function buildCombinedLabelPdf(items, options = {}) {
       // paper, so honouring it here would just waste a corner of every page.
       if (myntraBills.length) await placeOnSheets(out, myntraBills, sheet, innerPad, showOutlines, 0)
       if (flipkartBills.length) await placeStacked(out, flipkartBills, 2, startSlot % 2)
-      if (stickerBills.length) {
-        if (billsPerPage === 2) await placeTwoUpRotated(out, stickerBills)
-        else await placeOnSheets(out, stickerBills, sheet, innerPad, showOutlines, startSlot)
+      if (pickedBills.length) {
+        if (billsPerPage === 2) await placeTwoUpRotated(out, pickedBills)
+        else await placeOnSheets(out, pickedBills, sheet, innerPad, showOutlines, startSlot)
       }
     }
+  }
+
+  if (!out.getPageCount()) {
+    throw new Error('No bills selected — tick at least one bill to print.')
   }
 
   const bytes = await out.save()
   return {
     bytes,
     labelCount: wantLabels ? allLabels.length : 0,
-    billCount: wantBills ? allBills.length : 0,
+    billCount: wantBills ? billTotal : 0,
     sheetCount: out.getPageCount(),
   }
 }

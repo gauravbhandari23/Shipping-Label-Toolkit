@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   buildLabelPdf,
   buildCombinedLabelPdf,
@@ -146,6 +146,10 @@ export default function App() {
   const [showOutlines, setShowOutlines] = useState(false)
   const [output, setOutput] = useState('labels') // 'labels' | 'pairs' | 'both' | 'bills'
   const [billsPerPage, setBillsPerPage] = useState(4) // Amazon bills: 4 (actual size) or 2 (bigger)
+  // Which Amazon bills to print, tied to the exact bill list it was made for
+  // (`key`) — a new/removed file changes the list, and the pick quietly goes
+  // back to "all" instead of pointing at the wrong bills.
+  const [billPickState, setBillPickState] = useState({ key: '', picked: null }) // picked: Set of indices | null = all
   const [sheet, setSheet] = useState(DEFAULT_SHEET)
   const [startSlot, setStartSlot] = useState(0) // first sticker position to fill
 
@@ -378,6 +382,26 @@ export default function App() {
     syncSingleOverride(next)
   }
 
+  // Every Amazon bill in print order (same order buildCombinedLabelPdf packs
+  // them), numbered 1..n for the bill picker. Only when each Amazon file's
+  // bills were auto-detected — without detection there's no reliable count.
+  const amazonBills = useMemo(() => {
+    const amazonDocs = single ? (source === 'amazon' ? docs : []) : docs.filter((d) => d.source === 'amazon')
+    if (!amazonDocs.length || amazonDocs.some((d) => !d.layout)) return null
+    return amazonDocs.flatMap((d) =>
+      d.layout.flatMap((entry) => entry.bills.map((b) => ({ orderNo: b.orderNo || '', sku: b.skuText || '', file: d.name }))),
+    )
+  }, [docs, single, source])
+  const billListKey = amazonBills ? amazonBills.map((b, i) => `${i}:${b.file}:${b.orderNo}`).join('|') : ''
+  const billPick = amazonBills && billPickState.key === billListKey ? billPickState.picked : null
+  const setBillPick = (picked) => setBillPickState({ key: billListKey, picked })
+  const toggleBill = (i) => {
+    const next = new Set(billPick || amazonBills.map((_, j) => j))
+    if (next.has(i)) next.delete(i)
+    else next.add(i)
+    setBillPick(next.size === amazonBills.length ? null : next)
+  }
+
   const generate = useCallback(async () => {
     // --- Text-label mode ---
     if (mode === 'text') {
@@ -583,6 +607,7 @@ export default function App() {
         includeBills: out2 === 'both',
         billsOnly: out2 === 'bills',
         billsPerPage,
+        billPick: billPick ? [...billPick].sort((a, b) => a - b) : null,
         pairs: out2 === 'pairs',
         sheet,
         startSlot: Math.min(startSlot, perPage - 1),
@@ -601,12 +626,12 @@ export default function App() {
       })
     } catch (e) {
       console.error(e)
-      setError('Could not process the PDF(s): ' + e.message)
+      setError(e.message.startsWith('No bills selected') ? e.message : 'Could not process the PDF(s): ' + e.message)
       setStats(null)
     } finally {
       setBusy(false)
     }
-  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, billsPerPage, sheet, startSlot, perPage, myntraPair, myntraSku, amazonSku, canPair, pairInfo])
+  }, [mode, sizes, bold, align, textLayout, gridCols, gridRows, textPad, gridMargin, codes, symbology, showCodeText, barHeightPct, logoImg, logoDir, logoSizePct, logoCount, docs, single, source, splitPct, crop, innerPad, nudgeOut, showOutlines, output, billsPerPage, billPick, sheet, startSlot, perPage, myntraPair, myntraSku, amazonSku, canPair, pairInfo])
 
   // Regenerate whenever any input changes.
   useEffect(() => {
@@ -622,6 +647,7 @@ export default function App() {
     setShowOutlines(false)
     setOutput('labels')
     setBillsPerPage(4)
+    setBillPickState({ key: '', picked: null })
     setSheet(DEFAULT_SHEET)
     setStartSlot(0)
     setBold(true)
@@ -1459,6 +1485,51 @@ export default function App() {
                         {billsPerPage === 2
                           ? 'Each bill turned sideways to fill half the page (about 1.3× bigger). Cut on the dashed middle line — each half is one bill.'
                           : 'One bill in each quarter of the page, at its actual size.'}
+                      </small>
+                    </div>
+                    )}
+
+                    {!noBills && amazonBills && amazonBills.length > 1 && (output === 'bills' || output === 'both') && (
+                    <div className="ctrl">
+                      <span className="ctrl__label">
+                        Which Amazon bills{' '}
+                        <b className="val">
+                          {billPick ? billPick.size : amazonBills.length} of {amazonBills.length}
+                        </b>
+                      </span>
+                      <div className="billpick" role="group" aria-label="Choose which bills to print">
+                        {amazonBills.map((b, i) => {
+                          const on = !billPick || billPick.has(i)
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              className={'billpick__btn' + (on ? ' billpick__btn--on' : '')}
+                              aria-pressed={on}
+                              title={[b.orderNo && `Order ${b.orderNo}`, b.sku, b.file].filter(Boolean).join(' · ')}
+                              onClick={() => toggleBill(i)}
+                            >
+                              <span className="billpick__num">{i + 1}</span>
+                              <span className="billpick__meta">
+                                <span className="billpick__sku">{b.sku || 'Bill ' + (i + 1)}</span>
+                                {b.orderNo && <span className="billpick__order">{b.orderNo}</span>}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <div className="billpick__actions">
+                        <button type="button" className="billpick__link" onClick={() => setBillPick(null)}>
+                          Select all
+                        </button>
+                        <button type="button" className="billpick__link" onClick={() => setBillPick(new Set())}>
+                          Clear
+                        </button>
+                      </div>
+                      <small className="hint">
+                        Tap a number to leave that bill out (or back in). Ticked bills print in number
+                        order — 1, 2, 3… — the same order as the labels.
+                        {output === 'both' ? ' Labels all still print.' : ''}
                       </small>
                     </div>
                     )}

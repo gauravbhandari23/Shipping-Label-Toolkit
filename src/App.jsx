@@ -950,6 +950,11 @@ export default function App() {
   // The 2-or-4 bills-per-page choice only applies to Amazon bills.
   const hasAmazonBills = docs.length > 0 && (single ? source === 'amazon' : docs.some((d) => d.source === 'amazon'))
   const amazonBillsLabel = billsPerPage === 2 ? '2 per page, bigger' : '4 per page'
+  // How the bills lay out, for the export hint: Flipkart 2 per page, Myntra 4,
+  // Amazon whichever is picked below.
+  const billsDesc = single
+    ? source === 'amazon' ? amazonBillsLabel : source === 'flipkart' ? '2 per page' : '4 per page'
+    : hasAmazonBills ? `Amazon ${amazonBillsLabel}` : '2 or 4 per page by marketplace'
 
   return (
     <div className="app">
@@ -1426,8 +1431,8 @@ export default function App() {
                           : output === 'pairs'
                             ? 'Each order kept together — label on the left, its bill on the right, 2 per page.'
                             : output === 'both'
-                              ? `Labels first, then the bills (${hasAmazonBills && single ? amazonBillsLabel : source === 'flipkart' ? '2 per page' : '4 per page'}, each kept whole).`
-                              : `Only the bills (${hasAmazonBills && single ? amazonBillsLabel : source === 'flipkart' ? '2 per page' : '4 per page'}, each kept whole) — no labels.`}
+                              ? `Labels first, then the bills (${billsDesc}, each kept whole).`
+                              : `Only the bills (${billsDesc}, each kept whole) — no labels.`}
                       </small>
                     </div>
                     )}
